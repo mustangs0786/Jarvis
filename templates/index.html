@@ -1,0 +1,1554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>CareerAI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --or:#FF6310;--or-d:#e5570d;--or-bg:#FFF5F0;
+      --nv:#002677;--nv-l:#1a3a7a;
+      --bg:#F4F6FA;--wh:#FFFFFF;--bd:#E4E7EC;--bd-l:#F0F2F6;
+      --tx:#111827;--tx2:#4B5563;--tx3:#9CA3AF;
+      --gn:#16A34A;--gn-bg:#F0FDF4;--gn-b:#BBF7D0;
+      --am:#D97706;--am-bg:#FFFBEB;
+      --rd:#DC2626;--rd-bg:#FFF1F0;--rd-b:#FECACA;
+      --r:10px;--sh:0 1px 3px rgba(0,0,0,.07),0 2px 8px rgba(0,0,0,.04);
+      --sh-md:0 4px 16px rgba(0,0,0,.09);
+    }
+    body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--tx);display:flex;min-height:100vh;font-size:14px}
+
+    /* sidebar */
+    .sb{width:220px;flex-shrink:0;background:var(--nv);display:flex;flex-direction:column;min-height:100vh;position:sticky;top:0;height:100vh}
+    .sb-logo{padding:18px 18px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(255,255,255,.1)}
+    .lb{width:32px;height:32px;background:var(--or);border-radius:7px;display:grid;place-items:center;flex-shrink:0}
+    .lb svg{width:17px;height:17px;fill:white}
+    .lt{font-size:1.05rem;font-weight:800;color:white}.lt span{color:var(--or)}
+    .sb-nav{flex:1;padding:10px 8px;display:flex;flex-direction:column;gap:1px}
+    .ni{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:7px;cursor:pointer;transition:all .15s;font-size:.82rem;font-weight:500;color:rgba(255,255,255,.55);border:none;background:transparent;width:100%;text-align:left}
+    .ni svg{width:15px;height:15px;flex-shrink:0}
+    .ni:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.9)}
+    .ni.active{background:var(--or);color:white;font-weight:600}
+    .ni .bx{margin-left:auto;background:rgba(255,255,255,.2);color:white;font-size:.65rem;font-weight:700;padding:1px 6px;border-radius:20px}
+    .ni.active .bx{background:rgba(0,0,0,.2)}
+    .sb-ft{padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .sp{font-size:.7rem;color:rgba(255,255,255,.35);display:flex;align-items:center;gap:5px}
+    .sd{width:5px;height:5px;border-radius:50%;background:var(--gn)}
+
+    /* main */
+    .mn{flex:1;min-width:0;overflow-y:auto}
+    .tb{height:54px;background:var(--wh);border-bottom:1px solid var(--bd);display:flex;align-items:center;justify-content:space-between;padding:0 24px;position:sticky;top:0;z-index:50}
+    .tb-t{font-size:.95rem;font-weight:700;color:var(--nv)}.tb-s{font-size:.73rem;color:var(--tx3);margin-top:1px}
+    .ct{padding:24px;max-width:1060px}
+
+    /* sections */
+    .sec{display:none}.sec.active{display:block}
+
+    /* cards */
+    .card{background:var(--wh);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);padding:22px}
+    .card+.card{margin-top:14px}
+    .ch{font-size:.88rem;font-weight:700;color:var(--nv);display:flex;align-items:center;gap:7px;margin-bottom:16px}
+    .ch svg{width:15px;height:15px}
+
+    /* stats */
+    .sr{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+    @media(max-width:880px){.sr{grid-template-columns:repeat(2,1fr)}}
+    .sc{background:var(--wh);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);padding:16px 18px}
+    .sv{font-size:1.8rem;font-weight:800;color:var(--nv);line-height:1}
+    .sl{font-size:.72rem;color:var(--tx3);font-weight:500;margin-top:3px}
+    .sc.or .sv{color:var(--or)}.sc.gn .sv{color:var(--gn)}.sc.rd .sv{color:var(--rd)}
+
+    /* table */
+    .tw{overflow-x:auto;border-radius:8px;border:1px solid var(--bd)}
+    table{width:100%;border-collapse:collapse}
+    th{background:var(--bg);color:var(--tx2);font-weight:600;font-size:.68rem;text-transform:uppercase;letter-spacing:.05em;padding:9px 12px;text-align:left;border-bottom:1px solid var(--bd)}
+    td{padding:10px 12px;border-bottom:1px solid var(--bd-l);vertical-align:middle}
+    tr:last-child td{border-bottom:none}
+    tr:hover td{background:#FAFBFF}
+    .sp-pill{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:.68rem;font-weight:600}
+    .st-Applied{background:#EEF2FF;color:#4338CA}.st-Tailored{background:var(--am-bg);color:var(--am)}
+    .st-Submitted{background:var(--gn-bg);color:var(--gn)}.st-Interview{background:#F0F9FF;color:#0369A1}
+    .st-Offer{background:#F0FDF4;color:#15803D}.st-Rejected{background:#F3F4F6;color:var(--tx3)}
+    .st-Failed{background:var(--rd-bg);color:var(--rd)}
+    select.st-sel{border:1.5px solid var(--bd);border-radius:6px;font-size:.68rem;font-weight:600;padding:2px 6px;background:var(--wh);cursor:pointer;font-family:inherit;outline:none}
+
+    /* inputs */
+    .inp{height:38px;padding:0 11px;border:1.5px solid var(--bd);border-radius:7px;font-size:.83rem;font-family:inherit;color:var(--tx);background:var(--wh);outline:none;transition:border .2s;width:100%}
+    .inp:focus{border-color:var(--or)}
+    select.inp{cursor:pointer;height:38px}
+    textarea.inp{height:auto;padding:9px 11px;resize:vertical;line-height:1.5}
+    .ir{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+
+    /* buttons */
+    .btn{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:7px;border:none;font-size:.8rem;font-weight:600;cursor:pointer;transition:all .15s;font-family:inherit;white-space:nowrap}
+    .btn svg{width:13px;height:13px;flex-shrink:0}
+    .bp{background:var(--or);color:white}.bp:hover{background:var(--or-d)}.bp:disabled{opacity:.45;cursor:not-allowed}
+    .bo{background:var(--wh);color:var(--nv);border:1.5px solid var(--bd)}.bo:hover{border-color:var(--or);color:var(--or)}
+    .bn{background:var(--nv);color:white}.bn:hover{background:var(--nv-l)}
+    .bg{background:var(--gn);color:white}.bg:hover{background:#15803D}
+    .bgh{background:transparent;color:var(--tx2);border:none}.bgh:hover{color:var(--rd)}
+    .bsm{height:28px;padding:0 9px;font-size:.73rem}
+
+    /* upload */
+    .uz{border:2px dashed var(--bd);border-radius:var(--r);padding:28px 18px;text-align:center;cursor:pointer;transition:all .2s;position:relative}
+    .uz:hover,.uz.drag-over{border-color:var(--or);background:var(--or-bg)}
+    .uz input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+    .ui{width:40px;height:40px;background:var(--or-bg);border-radius:9px;display:grid;place-items:center;margin:0 auto 9px}
+    .ui svg{width:20px;height:20px;fill:var(--or)}
+
+    /* progress */
+    .pl{display:flex;flex-direction:column;gap:8px}
+    .pi{display:flex;align-items:center;gap:11px;padding:10px 14px;border-radius:8px;border:1.5px solid var(--bd);background:var(--wh);font-size:.82rem;font-weight:500;color:var(--tx2);transition:all .25s}
+    .pi.ac{border-color:var(--or);background:var(--or-bg);color:var(--tx)}
+    .pi.dk{border-color:var(--gn-b);background:var(--gn-bg);color:var(--gn)}
+    .pi.er{border-color:var(--rd-b);background:var(--rd-bg);color:var(--rd)}
+    .ico{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;flex-shrink:0}
+    .ico.wt{background:var(--bd)}.ico.sp{background:var(--or-bg)}.ico.ck{background:var(--gn-b)}.ico.fl{background:var(--rd-b)}
+    .spin{width:11px;height:11px;border:2px solid var(--or);border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* score ring */
+    .ring{position:relative;width:100px;height:100px}
+    .ring svg{transform:rotate(-90deg)}
+    .ring circle{transition:stroke-dashoffset 1s ease}
+    .rc{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+    .rv{font-size:1.7rem;font-weight:800;color:var(--nv);line-height:1}
+    .rm{font-size:.6rem;color:var(--tx3)}
+
+    /* tags */
+    .tag{display:inline-flex;padding:2px 8px;border-radius:20px;font-size:.7rem;font-weight:500;margin:2px 2px 0 0}
+    .tg{background:var(--gn-bg);color:#15803D}.tr{background:var(--rd-bg);color:#B91C1C}
+    .ta{background:var(--am-bg);color:#92400E}.tb2{background:#EEF2FF;color:#4338CA}
+    .tn{background:var(--bg);color:var(--tx2)}
+    /* multi-select pills (job filters) */
+    .pill{display:inline-flex;align-items:center;padding:3px 10px;border-radius:20px;font-size:.73rem;font-weight:500;cursor:pointer;border:1.5px solid var(--bd);background:var(--wh);color:var(--tx2);user-select:none;transition:all .15s;white-space:nowrap}
+    .pill:hover{border-color:var(--or);color:var(--or)}
+    .pill.on{background:var(--or);color:#fff;border-color:var(--or)}
+    .pills{display:flex;flex-wrap:wrap;gap:5px}
+
+    /* notices */
+    .nt{padding:11px 13px;border-radius:8px;font-size:.8rem;font-weight:500}
+    .nw{background:var(--am-bg);color:#92400E;border:1px solid #FDE68A}
+    .ni2{background:#EEF2FF;color:#3730A3;border:1px solid #C7D2FE}
+    .ns{background:var(--gn-bg);color:var(--gn);border:1px solid var(--gn-b)}
+    .ne{background:var(--rd-bg);color:var(--rd);border:1px solid var(--rd-b)}
+
+    /* wizard */
+    .wz{display:flex;align-items:center;gap:0;margin-bottom:20px}
+    .wi{display:flex;align-items:center;gap:5px;font-size:.75rem;font-weight:600;color:var(--tx3)}
+    .wi.active{color:var(--nv)}.wi.done{color:var(--gn)}
+    .wn{width:22px;height:22px;border-radius:50%;background:var(--bd);color:var(--tx3);display:grid;place-items:center;font-size:.7rem;font-weight:700;flex-shrink:0;transition:all .25s}
+    .wi.active .wn{background:var(--or);color:white}.wi.done .wn{background:var(--gn);color:white}
+    .wl{width:24px;height:2px;background:var(--bd);margin:0 3px}.wl.done{background:var(--gn)}
+
+    /* tabs */
+    .tabs{display:flex;gap:3px;background:var(--bg);border-radius:7px;padding:3px;margin-bottom:14px}
+    .tab{flex:1;padding:7px;border-radius:5px;border:none;background:transparent;cursor:pointer;font-size:.78rem;font-weight:600;color:var(--tx2);transition:all .15s;font-family:inherit}
+    .tab.active{background:var(--wh);color:var(--nv);box-shadow:var(--sh)}
+
+    /* diff */
+    .dt{display:flex;gap:3px;margin-bottom:9px}
+    .dt button{padding:4px 11px;border-radius:5px;border:1.5px solid var(--bd);background:var(--wh);cursor:pointer;font-size:.74rem;font-weight:600;color:var(--tx2);transition:all .15s;font-family:inherit}
+    .dt button.active{background:var(--nv);color:white;border-color:var(--nv)}
+    .rb{background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:16px 18px;max-height:360px;overflow-y:auto;font-size:.78rem;line-height:1.8;color:var(--tx);white-space:pre-wrap}
+
+    /* form grid */
+    .fg{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media(max-width:600px){.fg{grid-template-columns:1fr}}
+    .fgg{display:flex;flex-direction:column;gap:4px}
+    .fgg label{font-size:.72rem;font-weight:600;color:var(--tx2)}
+    .fgg.full{grid-column:1/-1}
+
+    /* job cards */
+    .jc{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--wh);border:1.5px solid var(--bd);border-radius:var(--r);transition:all .2s;margin-bottom:9px}
+    .jc:hover{border-color:var(--or);box-shadow:var(--sh)}
+    .jc.sel{border-color:var(--or);background:var(--or-bg)}
+    .jl{width:38px;height:38px;border-radius:7px;background:var(--bg);display:grid;place-items:center;flex-shrink:0;font-size:1rem;font-weight:700;color:var(--nv)}
+    .ji{flex:1;min-width:0}.jt{font-size:.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .jm{font-size:.73rem;color:var(--tx2);margin-top:1px}.jp{font-size:.68rem;color:var(--tx3);flex-shrink:0}
+    .chk{width:16px;height:16px;accent-color:var(--or);cursor:pointer;flex-shrink:0}
+
+    /* ATS */
+    .ats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+    @media(max-width:600px){.ats-grid{grid-template-columns:1fr 1fr}}
+    .ats-c{background:var(--bg);border-radius:8px;padding:12px 14px;text-align:center}
+    .ats-v{font-size:1.5rem;font-weight:800;color:var(--nv)}.ats-l{font-size:.68rem;color:var(--tx3);margin-top:2px}
+
+    /* roadmap */
+    .rm-card{background:var(--bg);border-radius:8px;padding:12px 14px;margin-bottom:9px;border-left:3px solid var(--or)}
+    .rm-skill{font-size:.84rem;font-weight:700;color:var(--nv)}.rm-tf{font-size:.7rem;color:var(--or);font-weight:600}
+    .rm-why{font-size:.76rem;color:var(--tx2);margin-top:3px}.rm-how{font-size:.76rem;color:var(--gn);margin-top:2px}
+
+    /* batch bar */
+    .batch-bar{position:sticky;bottom:0;background:var(--nv);color:white;padding:12px 20px;display:flex;align-items:center;gap:12px;border-radius:var(--r);margin-top:12px;font-size:.82rem;font-weight:600}
+    .batch-bar .cnt{background:var(--or);border-radius:20px;padding:2px 10px;font-size:.78rem}
+
+    /* misc */
+    .hidden{display:none!important}
+    .mt4{margin-top:16px}.mt3{margin-top:12px}.mt2{margin-top:8px}
+    .flex{display:flex}.gap2{gap:8px}.gap3{gap:12px}
+    .ac{align-items:center}.jb{justify-content:space-between}.jc2{justify-content:center}
+    .f1{flex:1}.sh{flex-shrink:0}
+    .tsm{font-size:.8rem}.txs{font-size:.72rem}
+    .fb{font-weight:700}.fm{font-weight:600}
+    .tm{color:var(--tx2)}.tf{color:var(--tx3)}.tn2{color:var(--nv)}.to{color:var(--or)}
+    .dv{height:1px;background:var(--bd);margin:16px 0}
+    .empty{text-align:center;padding:40px 20px;color:var(--tx3)}
+    .empty svg{width:36px;height:36px;margin:0 auto 10px;display:block;opacity:.3}
+    code{background:var(--bg);padding:2px 6px;border-radius:4px;font-size:.8rem;font-family:monospace}
+  </style>
+</head>
+<body>
+
+<!-- sidebar -->
+<aside class="sb">
+  <div class="sb-logo">
+    <div class="lb"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5z"/></svg></div>
+    <div class="lt">Career<span>AI</span></div>
+  </div>
+  <nav class="sb-nav">
+    <button class="ni active" onclick="goto('dashboard')" id="nav-dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard <span class="bx" id="bx-apps">0</span>
+    </button>
+    <button class="ni" onclick="goto('jobfeed')" id="nav-jobfeed">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      Job Feed
+    </button>
+    <button class="ni" onclick="goto('optimizer')" id="nav-optimizer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Optimizer
+    </button>
+    <button class="ni" onclick="goto('resume')" id="nav-resume">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Resume Builder
+    </button>
+  </nav>
+  <div class="sb-ft">
+    <div class="sp"><div class="sd"></div>Session: <span id="sid-disp">—</span></div>
+  </div>
+</aside>
+
+<!-- main -->
+<div class="mn">
+  <div class="tb">
+    <div><div class="tb-t" id="tb-t">Dashboard</div><div class="tb-s" id="tb-s">Track your job applications</div></div>
+    <div class="flex gap2 ac">
+      <button class="btn bp bsm" onclick="goto('optimizer')">+ New Application</button>
+    </div>
+  </div>
+
+  <div class="ct">
+
+  <!-- ═══ DASHBOARD ═══ -->
+  <div class="sec active" id="sec-dashboard">
+    <div class="sr">
+      <div class="sc"><div class="sv" id="st-tot">0</div><div class="sl">Total Applied</div></div>
+      <div class="sc gn"><div class="sv" id="st-sub">0</div><div class="sl">Submitted</div></div>
+      <div class="sc or"><div class="sv" id="st-tai">0</div><div class="sl">Tailored</div></div>
+      <div class="sc"><div class="sv" id="st-wk">0</div><div class="sl">This Week</div></div>
+    </div>
+    <div class="card">
+      <div class="ch" style="justify-content:space-between;margin-bottom:12px">
+        <span class="flex ac gap2"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>Application Log</span>
+        <button class="btn bo bsm" onclick="showAddModal()">+ Add manually</button>
+      </div>
+      <div id="app-table"></div>
+    </div>
+  </div>
+
+  <!-- ═══ JOB FEED ═══ -->
+  <div class="sec" id="sec-jobfeed">
+    <div class="card" style="padding-bottom:10px">
+      <!-- Row 1: title + source badges + refresh -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2" width="16" height="16"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span class="fm" style="color:var(--tx1);font-size:14px">Find Jobs</span>
+        <span class="tsm" style="color:var(--tx3);padding:2px 6px;background:rgba(0,112,243,.08);border-radius:4px">LinkedIn</span>
+        <span style="flex:1"></span>
+        <span id="jf-updated" class="tsm" style="color:var(--tx3)"></span>
+        <button class="btn bo bsm" onclick="searchJobs()" title="Refresh">
+          <svg id="jf-spin-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+          Refresh
+        </button>
+      </div>
+      <!-- Row 2: role search -->
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <input class="inp" style="flex:1" type="text" id="jf-role"
+          placeholder="Role — e.g. AI/ML engineer, data scientist, LLM engineer"
+          onkeydown="if(event.key==='Enter')searchJobs()"/>
+      </div>
+      <!-- Row 3: multi-select location pills -->
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:2px">
+        <span class="tsm" style="color:var(--tx3);padding-top:4px;white-space:nowrap;flex-shrink:0">📍 Cities</span>
+        <div class="pills" id="jf-locs">
+          <span class="pill on" data-val="Bengaluru"    onclick="togglePill(this,'jf-locs',true)">Bengaluru</span>
+          <span class="pill"    data-val="Hyderabad"    onclick="togglePill(this,'jf-locs',true)">Hyderabad</span>
+          <span class="pill"    data-val="Mumbai"       onclick="togglePill(this,'jf-locs',true)">Mumbai</span>
+          <span class="pill"    data-val="Pune"         onclick="togglePill(this,'jf-locs',true)">Pune</span>
+          <span class="pill"    data-val="Delhi NCR"    onclick="togglePill(this,'jf-locs',true)">Delhi NCR</span>
+          <span class="pill"    data-val="Chennai"      onclick="togglePill(this,'jf-locs',true)">Chennai</span>
+          <span class="pill"    data-val="India"        onclick="togglePill(this,'jf-locs',false)">🇮🇳 All India</span>
+          <span class="pill"    data-val="Remote"       onclick="togglePill(this,'jf-locs',false)">🌐 Remote</span>
+        </div>
+      </div>
+      <!-- Row 4: multi-select experience pills -->
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:2px">
+        <span class="tsm" style="color:var(--tx3);padding-top:4px;white-space:nowrap;flex-shrink:0">👤 Level</span>
+        <div class="pills" id="jf-exps">
+          <span class="pill on" data-val=""  onclick="togglePill(this,'jf-exps',true)">Any</span>
+          <span class="pill"    data-val="2" onclick="togglePill(this,'jf-exps',true)">Fresher</span>
+          <span class="pill"    data-val="3" onclick="togglePill(this,'jf-exps',true)">Junior</span>
+          <span class="pill"    data-val="4" onclick="togglePill(this,'jf-exps',true)">Senior</span>
+          <span class="pill"    data-val="5" onclick="togglePill(this,'jf-exps',true)">Lead</span>
+        </div>
+      </div>
+      <!-- Row 5: time + big tech + search -->
+      <div class="ir" style="gap:6px;flex-wrap:wrap">
+        <select class="inp bsm" style="flex:1;min-width:120px" id="jf-time">
+          <option value="r3600">⏱ Last 1 hour</option>
+          <option value="r86400" selected>⏱ Last 24 hours</option>
+          <option value="r259200">⏱ Last 3 days</option>
+          <option value="r604800">⏱ Last 7 days</option>
+          <option value="r2592000">⏱ Last 30 days</option>
+        </select>
+        <label class="tsm" style="display:flex;align-items:center;gap:5px;cursor:pointer;padding:0 4px;color:var(--tx2)">
+          <input type="checkbox" id="jf-big" style="width:13px;height:13px"> Big Tech only
+        </label>
+        <button class="btn bp bsm" onclick="searchJobs()">Search</button>
+      </div>
+      <!-- synonym hint -->
+      <div id="jf-hint" class="tsm mt3" style="color:var(--tx3);display:none">
+        Searching synonyms: <span id="jf-terms" style="color:var(--or)"></span>
+      </div>
+    </div>
+    <div id="jf-load" class="hidden" style="text-align:center;padding:24px;color:var(--tx3)">
+      <div class="spin" style="margin:0 auto 8px;width:18px;height:18px;border-width:2.5px"></div>
+      <div class="tsm" id="jf-load-msg">Searching LinkedIn...</div>
+    </div>
+    <div id="jf-results" style="margin-top:10px"></div>
+    <!-- batch bar -->
+    <div class="batch-bar hidden" id="batch-bar">
+      <span>Selected:</span><span class="cnt" id="batch-cnt">0</span>
+      <span class="f1"></span>
+      <button class="btn bg" onclick="batchApply()">Apply to All Selected</button>
+      <button class="btn bo" style="color:white;border-color:rgba(255,255,255,.3)" onclick="clearBatch()">Clear</button>
+    </div>
+  </div>
+
+  <!-- ═══ OPTIMIZER ═══ -->
+  <div class="sec" id="sec-optimizer">
+    <!-- 6-step wizard bar -->
+    <div class="wz" id="opt-wz" style="flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px">
+      <div class="wi active" id="wz1"><div class="wn">1</div><span class="wz-lbl">Upload</span></div>
+      <div class="wl" id="wl1" style="width:16px;flex-shrink:0"></div>
+      <div class="wi" id="wz2"><div class="wn">2</div><span class="wz-lbl">Job URL</span></div>
+      <div class="wl" id="wl2" style="width:16px;flex-shrink:0"></div>
+      <div class="wi" id="wz3"><div class="wn">3</div><span class="wz-lbl">Optimize</span></div>
+      <div class="wl" id="wl3" style="width:16px;flex-shrink:0"></div>
+      <div class="wi" id="wz4"><div class="wn">4</div><span class="wz-lbl">Results</span></div>
+      <div class="wl" id="wl4" style="width:16px;flex-shrink:0"></div>
+      <div class="wi" id="wz5"><div class="wn">5</div><span class="wz-lbl">ATS</span></div>
+      <div class="wl" id="wl5" style="width:16px;flex-shrink:0"></div>
+      <div class="wi" id="wz6"><div class="wn">6</div><span class="wz-lbl">Apply</span></div>
+    </div>
+
+    <!-- STEP 1: upload (smart — detects existing session) -->
+    <div id="os1">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Your Resume</div>
+        <!-- session-loaded banner (shown when resume already uploaded in Resume Builder) -->
+        <div id="opt-sess-ok" class="hidden">
+          <div class="nt ns" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--gn)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span class="f1"><strong id="opt-sess-name">Resume</strong> loaded from Resume Builder</span>
+            <button class="btn bo bsm" onclick="goto('resume')">Replace</button>
+          </div>
+        </div>
+        <!-- no resume yet → single upload point lives in Resume Builder -->
+        <div id="opt-no-sess" class="hidden">
+          <div class="nt nw" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="f1">No resume yet. Upload it once in <strong>Resume Builder</strong> — it becomes your base for every application and auto-fills your profile.</span>
+            <button class="btn bp bsm" onclick="goto('resume')">Go to Resume Builder</button>
+          </div>
+        </div>
+        <div id="opt-us" class="hidden mt3"></div>
+        <div class="flex mt4" style="justify-content:flex-end">
+          <button class="btn bp" id="opt-n1" disabled onclick="oGo(2)">Continue <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2: job url -->
+    <div id="os2" class="hidden">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>Job Details</div>
+        <p class="tsm tm" style="margin-bottom:10px">Paste any job posting URL — LinkedIn, Greenhouse, Lever, or a company careers page.</p>
+        <input class="inp" type="url" id="opt-url" placeholder="https://..."/>
+        <div class="flex mt4" style="justify-content:space-between">
+          <button class="btn bo" onclick="oGo(1)">← Back</button>
+          <button class="btn bp" onclick="startOpt()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Analyze &amp; Optimize</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3: optimization progress -->
+    <div id="os3" class="hidden">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>Agent at Work</div>
+        <div class="pl" id="opt-pl">
+          <div class="pi" id="pp-scr"><div class="ico wt" id="pi-scr"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Fetching job description</span></div>
+          <div class="pi" id="pp-ana"><div class="ico wt" id="pi-ana"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Analyzing resume match</span></div>
+          <div class="pi" id="pp-rwr"><div class="ico wt" id="pi-rwr"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Tailoring resume</span></div>
+          <div class="pi" id="pp-pdf"><div class="ico wt" id="pi-pdf"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Generating PDF</span></div>
+        </div>
+        <div id="opt-perr" class="nt ne hidden mt3"></div>
+      </div>
+    </div>
+
+    <!-- STEP 4: results -->
+    <div id="os4" class="hidden">
+
+      <!-- ── Next-step action bar (TOP) ── -->
+      <div id="opt-next-bar" class="hidden" style="margin-bottom:14px;padding:13px 18px;background:var(--nv);border-radius:var(--r);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="white" stroke-width="2" style="flex-shrink:0"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span class="f1 tsm" style="color:rgba(255,255,255,.85);flex:1;min-width:160px">Resume tailored.</span>
+        <div class="flex gap2" style="flex-wrap:wrap">
+          <button class="btn" style="background:var(--or);color:white;border:none" onclick="oGo(5)">ATS Check <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><polyline points="9 18 15 12 9 6"/></svg></button>
+          <button class="btn bo bsm" style="color:white;border-color:rgba(255,255,255,.35)" onclick="oGo(6)">Skip → Apply</button>
+        </div>
+      </div>
+
+      <!-- score + skills -->
+      <div class="card">
+        <div class="flex ac jb" style="margin-bottom:18px;flex-wrap:wrap;gap:8px">
+          <div class="ch" style="margin-bottom:0"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Match Results</div>
+          <div class="flex gap2">
+            <button class="btn bo bsm" onclick="oReset()">Start Over</button>
+            <a id="opt-dl" class="btn bp bsm hidden" href="#" download><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>PDF</a>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:160px 1fr;gap:18px;align-items:start">
+          <div style="display:flex;flex-direction:column;align-items:center;padding:16px;background:var(--bg);border-radius:var(--r)">
+            <div class="ring">
+              <svg width="100" height="100" viewBox="0 0 100 100">
+                <circle cx="50" cy="50" r="42" fill="none" stroke="#F3F4F6" stroke-width="8"/>
+                <circle id="opt-ring" cx="50" cy="50" r="42" fill="none" stroke="#FF6310" stroke-width="8" stroke-linecap="round" stroke-dasharray="264" stroke-dashoffset="264"/>
+              </svg>
+              <div class="rc"><span class="rv" id="opt-sv">—</span><span class="rm">/100</span></div>
+            </div>
+            <div class="txs fb mt2" id="opt-sl" style="color:var(--or)">—</div>
+            <div class="txs tf mt2" id="opt-sr" style="text-align:center;line-height:1.4"></div>
+          </div>
+          <div>
+            <div class="txs tf fm" style="text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">Skills Breakdown</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div><div class="txs fb" style="color:var(--gn);margin-bottom:6px">✓ Matched</div><div id="opt-mtch"></div></div>
+              <div><div class="txs fb" style="color:var(--rd);margin-bottom:6px">✗ Missing</div><div id="opt-miss"></div></div>
+            </div>
+            <div class="mt3" id="opt-atsr" style="display:none">
+              <div class="txs tf fm" style="text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">ATS Keywords to Add</div>
+              <div id="opt-atkw"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- low-match roadmap -->
+      <div class="card mt4 hidden" id="opt-roadmap-card">
+        <div class="ch" style="margin-bottom:6px"><svg viewBox="0 0 24 24" fill="none" stroke="var(--am)" stroke-width="2"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>Improvement Roadmap</div>
+        <p class="tsm tm" id="opt-rm-assess" style="margin-bottom:12px"></p>
+        <div id="opt-rm-list"></div>
+        <div class="mt3 flex gap2" style="flex-wrap:wrap" id="opt-qw"></div>
+        <div class="mt3" id="opt-alt"></div>
+      </div>
+
+      <!-- resume diff -->
+      <div class="card mt4" id="opt-res-card">
+        <div class="ch" style="margin-bottom:10px"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>Resume</div>
+        <div class="dt">
+          <button class="active" onclick="sDiff('optimized')">Optimized</button>
+          <button onclick="sDiff('original')">Original</button>
+        </div>
+        <div class="rb" id="opt-rb"></div>
+      </div>
+
+      <!-- cover letter + changes -->
+      <div class="card mt4" id="opt-cl-card" style="display:none">
+        <div class="ch" style="margin-bottom:12px"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>Cover Letter Hook</div>
+        <div style="padding:12px 14px;background:var(--bg);border-radius:8px;border-left:3px solid var(--or)">
+          <p class="tsm" id="opt-cl" style="font-style:italic;color:var(--tx2);line-height:1.6"></p>
+        </div>
+        <div class="dv"></div>
+        <div class="txs tf fm" style="text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">What Changed</div>
+        <div id="opt-chg"></div>
+      </div>
+
+    </div>
+
+    <!-- STEP 5: ATS check -->
+    <div id="os5" class="hidden">
+      <div class="card">
+        <div class="flex ac jb" style="margin-bottom:16px;flex-wrap:wrap;gap:8px">
+          <div class="ch" style="margin-bottom:0"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>ATS Check <span class="tsm tf fm" style="font-weight:400;margin-left:6px">(optional)</span></div>
+          <div class="flex gap2">
+            <button class="btn bo bsm" onclick="oGo(4)">← Back</button>
+            <button class="btn bo bsm" onclick="oGo(6)">Skip → Apply</button>
+          </div>
+        </div>
+        <!-- running state -->
+        <div id="ats5-run" style="text-align:center;padding:28px 0">
+          <div class="spin" style="margin:0 auto 10px;width:22px;height:22px;border-width:3px"></div>
+          <p class="tsm tm">Scanning your PDF against ATS systems...</p>
+        </div>
+        <!-- result state (hidden until done) -->
+        <div id="ats5-res" class="hidden">
+          <!-- score row -->
+          <div class="ats-grid" id="ats5-scores"></div>
+          <p class="tsm tm mt3" id="ats5-summary" style="font-style:italic"></p>
+          <!-- pass banner -->
+          <div id="ats5-pass" class="hidden mt3">
+            <div class="nt ns" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--gn)" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              <span class="f1"><strong>ATS check passed!</strong> Your resume parses cleanly — ready to apply.</span>
+              <button class="btn" style="background:var(--gn);color:white;border:none" onclick="oGo(6)">Next: Apply <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="13" height="13"><polyline points="9 18 15 12 9 6"/></svg></button>
+            </div>
+          </div>
+          <!-- fail banner -->
+          <div id="ats5-fail" class="hidden mt3">
+            <div class="nt ne" style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--rd)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span class="f1"><strong>ATS issues found.</strong> AI will fix and regenerate your resume.</span>
+              <button class="btn" style="background:var(--rd);color:white;border:none" id="ats5-regen-btn" onclick="regenAfterATS()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.32"/></svg>Fix &amp; Regenerate</button>
+              <button class="btn bo bsm" onclick="oGo(6)">Skip — Apply Anyway</button>
+            </div>
+            <div id="ats5-issues"></div>
+          </div>
+          <!-- regeneration progress (hidden by default) -->
+          <div id="ats5-regen" class="hidden mt3">
+            <div class="nt ni2" style="margin-bottom:10px"><strong>Regenerating resume with fixes...</strong></div>
+            <div class="pl">
+              <div class="pi" id="rp-scr"><div class="ico wt" id="ri-scr"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Re-fetching job</span></div>
+              <div class="pi" id="rp-rwr"><div class="ico wt" id="ri-rwr"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Re-tailoring resume</span></div>
+              <div class="pi" id="rp-pdf"><div class="ico wt" id="ri-pdf"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Generating new PDF</span></div>
+              <div class="pi" id="rp-ats"><div class="ico wt" id="ri-ats"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Re-running ATS check</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 6: apply -->
+    <div id="os6" class="hidden">
+      <div class="card">
+        <div class="flex ac jb" style="margin-bottom:16px;flex-wrap:wrap;gap:8px">
+          <div class="ch" style="margin-bottom:0"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>Auto-Apply</div>
+          <button class="btn bo bsm" onclick="oGo(5)">← Back</button>
+        </div>
+        <!-- job info -->
+        <div id="ap6-job" style="padding:12px 14px;background:var(--bg);border-radius:8px;margin-bottom:14px"></div>
+        <!-- profile check -->
+        <div id="ap6-profile" style="margin-bottom:14px"></div>
+        <!-- action -->
+        <div id="ap6-action">
+          <button class="btn bp" style="width:100%;justify-content:center;padding:12px" onclick="triggerApply()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>
+            Submit Application Now
+          </button>
+          <p class="tsm tf mt2" style="text-align:center">AI agent fills the form automatically using your saved profile</p>
+        </div>
+        <!-- apply progress -->
+        <div class="mt3">
+          <div class="pl" id="ap-pl" style="display:none"></div>
+          <div id="ap-res" class="hidden mt3"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ RESUME BUILDER ═══ -->
+  <div class="sec" id="sec-resume">
+    <div class="tabs">
+      <button class="tab active" onclick="rbTab('profile')">Profile</button>
+      <button class="tab" onclick="rbTab('upload')">Resume Upload</button>
+      <button class="tab" onclick="rbTab('update')">Update Resume</button>
+      <button class="tab" onclick="rbTab('linkedin')">LinkedIn Setup</button>
+    </div>
+
+    <!-- profile tab -->
+    <div id="rb-profile">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Your Profile <span class="txs tf fm" style="margin-left:auto">Used for auto-apply form filling</span></div>
+        <div class="fg">
+          <div class="fgg"><label>Full Name</label><input class="inp" id="pf-name" placeholder="Deepak Kumar"/></div>
+          <div class="fgg"><label>Email</label><input class="inp" type="email" id="pf-email" placeholder="you@email.com"/></div>
+          <div class="fgg"><label>Phone</label><input class="inp" id="pf-phone" placeholder="+91 9876543210"/></div>
+          <div class="fgg"><label>City</label><input class="inp" id="pf-city" placeholder="Bengaluru"/></div>
+          <div class="fgg"><label>LinkedIn URL</label><input class="inp" id="pf-li" placeholder="linkedin.com/in/handle"/></div>
+          <div class="fgg"><label>GitHub URL</label><input class="inp" id="pf-gh" placeholder="github.com/handle"/></div>
+          <div class="fgg"><label>Current Title</label><input class="inp" id="pf-tt" placeholder="Senior Data Scientist"/></div>
+          <div class="fgg"><label>Years of Experience</label><input class="inp" id="pf-ex" placeholder="4 years"/></div>
+          <div class="fgg"><label>Notice Period</label><input class="inp" id="pf-np" placeholder="30 days"/></div>
+          <div class="fgg"><label>Expected CTC</label><input class="inp" id="pf-ec" placeholder="25 LPA"/></div>
+          <div class="fgg"><label>Current CTC</label><input class="inp" id="pf-cc" placeholder="18 LPA"/></div>
+        </div>
+        <div class="flex mt4" style="justify-content:flex-end;gap:8px">
+          <button class="btn bp" onclick="saveProfile()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Save Profile</button>
+        </div>
+        <div id="pf-ok" class="nt ns hidden mt3">Profile saved — auto-apply will use these details.</div>
+      </div>
+    </div>
+
+    <!-- upload tab -->
+    <div id="rb-upload" class="hidden">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>Upload Base Resume</div>
+        <div class="uz" id="rb-dz"><input type="file" id="rb-fi" accept=".pdf"/>
+          <div class="ui"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 1.5L18.5 9H13V3.5z"/></svg></div>
+          <p class="fm tsm" style="margin-bottom:2px">Drop your PDF resume here</p>
+          <p class="txs tf">This becomes your base for all future optimizations</p>
+        </div>
+        <div id="rb-st" class="hidden mt3"></div>
+      </div>
+    </div>
+
+    <!-- update tab -->
+    <div id="rb-update" class="hidden">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>Update Your Resume</div>
+        <p class="tsm tm" style="margin-bottom:12px">Describe what's new — new job, promotion, certification, project. No job URL needed.</p>
+        <textarea class="inp" id="upd-desc" rows="5" placeholder="e.g. I joined Flipkart as Senior ML Engineer in Jan 2025. I've been working on recommendation systems using PyTorch and leading a team of 4 engineers. Also completed AWS Solutions Architect certification."></textarea>
+        <div class="flex mt4" style="justify-content:flex-end">
+          <button class="btn bp" onclick="startUpdate()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Update &amp; Rewrite</button>
+        </div>
+      </div>
+      <!-- update progress -->
+      <div class="card mt4 hidden" id="upd-prog-card">
+        <div class="pl" id="upd-pl">
+          <div class="pi" id="up-mrg"><div class="ico wt" id="ui-mrg"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Merging update into resume</span></div>
+          <div class="pi" id="up-rwr"><div class="ico wt" id="ui-rwr"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Rewriting with improvements</span></div>
+          <div class="pi" id="up-pdf"><div class="ico wt" id="ui-pdf"><svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Generating PDF</span></div>
+        </div>
+      </div>
+      <div class="card mt4 hidden" id="upd-result-card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--gn)" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>Resume Updated</div>
+        <div id="upd-chg" style="margin-bottom:12px"></div>
+        <div class="rb" id="upd-rb"></div>
+        <div class="flex mt4" style="justify-content:flex-end;gap:8px">
+          <a id="upd-dl" class="btn bp bsm hidden" href="#" download>Download Updated PDF</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- linkedin setup tab -->
+    <div id="rb-linkedin" class="hidden">
+      <div class="card">
+        <div class="ch"><svg viewBox="0 0 24 24" fill="none" stroke="var(--or)" stroke-width="2"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/></svg>LinkedIn Session Setup</div>
+        <div id="li-status-box">
+          <div class="flex ac gap3" style="padding:14px;background:var(--bg);border-radius:8px">
+            <div class="spin" style="width:14px;height:14px;border-width:2px"></div>
+            <span class="tsm tm">Checking session status...</span>
+          </div>
+        </div>
+        <div class="dv"></div>
+        <p class="tsm tm" style="margin-bottom:12px">LinkedIn requires a saved cookie session for auto-apply. Log in once — cookies are reused for weeks.</p>
+        <div class="nt nw tsm" style="margin-bottom:12px">
+          <strong>Security:</strong> Cookies are saved locally on this machine only. Your password is never stored by CareerAI.
+        </div>
+        <button class="btn bp" onclick="liLogin()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>Launch LinkedIn Login</button>
+        <div id="li-prog" class="hidden pl mt3"></div>
+        <div class="nt ni2 mt3 tsm">
+          Or run manually in terminal: <code>python linkedin_url_extractor.py login</code>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /ct -->
+</div><!-- /mn -->
+
+<!-- Add modal -->
+<div id="add-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:200;display:flex;align-items:center;justify-content:center">
+  <div class="card" style="width:420px;max-width:95vw;box-shadow:var(--sh-md)">
+    <div class="ch" style="justify-content:space-between;margin-bottom:14px">Add Application<button class="btn bgh" style="height:22px;padding:0" onclick="closeModal()">✕</button></div>
+    <div class="fg">
+      <div class="fgg"><label>Job Title</label><input class="inp" id="am-t" placeholder="ML Engineer"/></div>
+      <div class="fgg"><label>Company</label><input class="inp" id="am-c" placeholder="Google"/></div>
+      <div class="fgg full"><label>Job URL</label><input class="inp" id="am-u" placeholder="https://..."/></div>
+      <div class="fgg"><label>Status</label><select class="inp" id="am-s"><option>Applied</option><option>Tailored</option><option>Submitted</option><option>Interview</option><option>Offer</option><option>Rejected</option></select></div>
+      <div class="fgg"><label>Applied On</label><input class="inp" type="date" id="am-d"/></div>
+    </div>
+    <div class="flex mt4 gap2" style="justify-content:flex-end">
+      <button class="btn bo" onclick="closeModal()">Cancel</button>
+      <button class="btn bp" onclick="submitModal()">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let SID = localStorage.getItem('careerai_sid') || null;
+let optOrig='', optOpt='', optJobUrl='';
+let batchSelected = new Set();
+
+// ── Init ───────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  if (SID) { document.getElementById('sid-disp').textContent = SID; loadDash(); loadProfile(); }
+  document.getElementById('am-d').value = new Date().toISOString().slice(0,10);
+  dzSetup('rb-dz','rb-fi', handleRbUpload);   // single upload point: Resume Builder
+  checkOptSession();
+});
+
+// ── Multi-select pill helpers ──────────────────────────────────────────────
+function togglePill(el, groupId, multi) {
+  const group = document.getElementById(groupId);
+  const pills = [...group.querySelectorAll('.pill')];
+  if (!multi) {
+    // Exclusive: deselect all, select only this one
+    pills.forEach(p => p.classList.remove('on'));
+    el.classList.add('on');
+    return;
+  }
+  // Toggle this pill
+  el.classList.toggle('on');
+  // Ensure at least one is selected
+  if (!group.querySelector('.pill.on')) el.classList.add('on');
+}
+
+function pillVals(groupId) {
+  return [...document.querySelectorAll(`#${groupId} .pill.on`)].map(p => p.dataset.val);
+}
+
+// ── Nav ────────────────────────────────────────────────────────────────────
+const NAV_T = {dashboard:'Dashboard',jobfeed:'Job Feed',optimizer:'Optimizer',resume:'Resume Builder'};
+const NAV_S = {dashboard:'Track your applications',jobfeed:'LinkedIn · synonym-aware · India-focused · auto-refresh',optimizer:'Tailor your resume to any job',resume:'Profile, uploads & LinkedIn setup'};
+function goto(n) {
+  document.querySelectorAll('.sec').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.ni').forEach(b=>b.classList.remove('active'));
+  document.getElementById('sec-'+n).classList.add('active');
+  document.getElementById('nav-'+n).classList.add('active');
+  document.getElementById('tb-t').textContent = NAV_T[n];
+  document.getElementById('tb-s').textContent = NAV_S[n];
+  if (n==='dashboard') loadDash();
+  if (n==='resume') { loadProfile(); checkLiStatus(); }
+  if (n==='optimizer') checkOptSession();
+  if (n==='jobfeed') {
+    // Auto-run on first open, then auto-refresh every 15 min
+    if(!document.getElementById('jf-results').innerHTML.trim()) searchJobs();
+    _jfStartAutoRefresh();
+  } else {
+    _jfStopAutoRefresh();
+  }
+}
+
+// ── Drag/drop upload ───────────────────────────────────────────────────────
+function dzSetup(zid, iid, handler) {
+  const z=document.getElementById(zid), i=document.getElementById(iid);
+  z.addEventListener('dragover',e=>{e.preventDefault();z.classList.add('drag-over')});
+  z.addEventListener('dragleave',()=>z.classList.remove('drag-over'));
+  z.addEventListener('drop',e=>{e.preventDefault();z.classList.remove('drag-over');if(e.dataTransfer.files[0])handler(e.dataTransfer.files[0])});
+  i.addEventListener('change',()=>{if(i.files[0])handler(i.files[0])});
+}
+
+async function uploadFile(file) {
+  const fd=new FormData(); fd.append('file',file);
+  const r=await fetch('/api/upload',{method:'POST',body:fd});
+  const d=await r.json();
+  if(!r.ok) throw new Error(d.detail||'Upload failed');
+  return d;
+}
+
+async function handleOptUpload(file) {
+  if(!file.name.toLowerCase().endsWith('.pdf')) return showEl('opt-us','<p class="tsm" style="color:var(--rd)">PDF files only.</p>');
+  showEl('opt-us','<p class="tsm tm">Parsing resume...</p>');
+  document.getElementById('opt-n1').disabled=true;
+  try {
+    const d=await uploadFile(file);
+    SID=d.session_id; localStorage.setItem('careerai_sid',SID);
+    document.getElementById('sid-disp').textContent=SID;
+    if(d.profile) fillProfileForm(d.profile);
+    showEl('opt-us',`<p class="tsm"><span style="color:var(--gn);font-weight:600">✓ ${file.name}</span> — parsed as <strong>${d.name||'Resume'}</strong></p>`);
+    document.getElementById('opt-n1').disabled=false;
+  } catch(e) { showEl('opt-us',`<p class="tsm" style="color:var(--rd)">${e.message}</p>`); }
+}
+
+async function handleRbUpload(file) {
+  if(!file.name.toLowerCase().endsWith('.pdf')) return;
+  showEl('rb-st','<p class="tsm tm">Parsing resume &amp; extracting profile...</p>');
+  try {
+    const d=await uploadFile(file);
+    SID=d.session_id; localStorage.setItem('careerai_sid',SID);
+    document.getElementById('sid-disp').textContent=SID;
+    const filled=d.profile ? fillProfileForm(d.profile) : 0;
+    showEl('rb-st',`<div style="display:flex;flex-direction:column;gap:6px">
+      <p class="tsm" style="color:var(--gn);font-weight:600">✓ ${file.name} uploaded — session ${SID}</p>
+      ${filled>0?`<div class="nt ns" style="padding:8px 12px">
+        <strong>${filled} profile fields auto-filled</strong> from your resume.
+        <button class="btn bo bsm" style="margin-left:8px" onclick="rbTab('profile')">Review Profile</button>
+      </div>`:''}
+    </div>`);
+  } catch(e) { showEl('rb-st',`<p class="tsm" style="color:var(--rd)">${e.message}</p>`); }
+}
+
+function fillProfileForm(p) {
+  const map={
+    'pf-name':'full_name','pf-email':'email','pf-phone':'phone',
+    'pf-city':'city','pf-li':'linkedin','pf-gh':'github',
+    'pf-tt':'current_title','pf-ex':'years_experience'
+  };
+  let count=0;
+  for(const [id,key] of Object.entries(map)){
+    const val=(p[key]||'').trim();
+    const el=document.getElementById(id);
+    if(el && val){el.value=val;count++;}
+  }
+  return count;
+}
+
+// ── Optimizer steps ────────────────────────────────────────────────────────
+const OPT_STEPS=6;
+function oGo(n) {
+  for(let i=1;i<=OPT_STEPS;i++){
+    const s=document.getElementById('os'+i); if(s) s.classList.toggle('hidden',i!==n);
+    const w=document.getElementById('wz'+i); if(!w) continue;
+    w.classList.toggle('active',i===n); w.classList.toggle('done',i<n);
+    w.querySelector('.wn').textContent=i<n?'✓':i;
+    const l=document.getElementById('wl'+i); if(l) l.classList.toggle('done',i<n);
+  }
+  window.scrollTo({top:0,behavior:'smooth'});
+  if(n===5) startATS5();
+  if(n===6) renderApplyStep();
+}
+
+function oReset() {
+  optOrig='';optOpt='';optJobUrl='';
+  document.getElementById('opt-fi').value='';
+  document.getElementById('opt-us').classList.add('hidden');
+  document.getElementById('opt-url').value='';
+  document.getElementById('opt-cl-card').style.display='none';
+  document.getElementById('opt-dl').classList.add('hidden');
+  document.getElementById('opt-atsr').style.display='none';
+  document.getElementById('opt-roadmap-card').classList.add('hidden');
+  document.getElementById('opt-next-bar').classList.add('hidden');
+  document.getElementById('ats5-run').classList.remove('hidden');
+  document.getElementById('ats5-res').classList.add('hidden');
+  resetPI(['pp-scr','pp-ana','pp-rwr','pp-pdf'],['pi-scr','pi-ana','pi-rwr','pi-pdf']);
+  // Re-check session on reset (resume may still be loaded)
+  checkOptSession();
+  oGo(1);
+}
+
+// ── Session detection for Step 1 ───────────────────────────────────────────
+async function checkOptSession() {
+  if(!SID) { showOptUpload(); return; }
+  try {
+    const r=await fetch(`/api/session/${SID}`);
+    const d=await r.json();
+    if(d.valid) {
+      document.getElementById('opt-sess-name').textContent=d.filename||d.name||'Resume';
+      document.getElementById('opt-sess-ok').classList.remove('hidden');
+      document.getElementById('opt-no-sess').classList.add('hidden');
+      document.getElementById('opt-n1').disabled=false;
+    } else { showOptUpload(); }
+  } catch(e) { showOptUpload(); }
+}
+function showOptUpload(){
+  document.getElementById('opt-sess-ok').classList.add('hidden');
+  document.getElementById('opt-no-sess').classList.remove('hidden');
+  document.getElementById('opt-n1').disabled=true;
+}
+
+// ── Start optimization ─────────────────────────────────────────────────────
+function startOpt() {
+  const url=document.getElementById('opt-url').value.trim();
+  if(!url) return alert('Please enter a job URL.');
+  if(!SID) return alert('Please upload your resume first.');
+  optJobUrl=url; oGo(3);
+  document.getElementById('opt-perr').classList.add('hidden');
+  resetPI(['pp-scr','pp-ana','pp-rwr','pp-pdf'],['pi-scr','pi-ana','pi-rwr','pi-pdf']);
+  runOptSSE(url);
+}
+
+function runOptSSE(url, onDone) {
+  const sse=new EventSource(`/api/analyze?session_id=${SID}&job_url=${encodeURIComponent(url)}&save=true`);
+  sse.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    handleOptEv(d);
+    if(['done','low_match','error'].includes(d.step)){
+      sse.close();
+      if(onDone) onDone(d);
+    }
+  };
+  sse.onerror=()=>{ sse.close(); showNt('opt-perr','Connection lost. Please try again.'); };
+}
+
+function handleOptEv(d) {
+  const s=d.step;
+  if(s==='scraping'){setPI('pp-scr','pi-scr','sp');return}
+  if(s==='scraped'){setPI('pp-scr','pi-scr','ck');return}
+  if(s==='analyzing'){setPI('pp-ana','pi-ana','sp');return}
+  if(s==='analyzed'){setPI('pp-ana','pi-ana','ck');return}
+  if(s==='roadmap'){setPI('pp-rwr','pi-rwr','sp');return}
+  if(s==='rewriting'){setPI('pp-rwr','pi-rwr','sp');return}
+  if(s==='rewritten'){setPI('pp-rwr','pi-rwr','ck');return}
+  if(s==='pdf'){setPI('pp-pdf','pi-pdf','sp');return}
+  if(s==='pdf_done'){setPI('pp-pdf','pi-pdf','ck');return}
+  if(s==='error'){setPI('pp-scr','pi-scr','fl');showNt('opt-perr',d.msg);return}
+  if(s==='low_match'){setPI('pp-ana','pi-ana','ck');renderLowMatch(d);setTimeout(()=>oGo(4),300);return}
+  if(s==='done'){setPI('pp-pdf','pi-pdf','ck');renderDone(d);setTimeout(()=>oGo(4),300);}
+}
+
+function renderDone(d) {
+  optOrig=d.original_text||''; optOpt=d.optimized_text||'';
+  rScore(d.analysis); rSkills(d.analysis);
+  document.getElementById('opt-rb').textContent=optOpt;
+  const cl=d.cover_letter||d.rewrite?.cover_letter_hook||'';
+  if(cl){document.getElementById('opt-cl').textContent='"'+cl+'"';document.getElementById('opt-cl-card').style.display='';}
+  else{document.getElementById('opt-cl-card').style.display='none';}
+  const chg=d.rewrite?.changes_made||[];
+  document.getElementById('opt-chg').innerHTML=chg.map(c=>`<div class="flex gap2 mt2"><span style="color:var(--gn);font-weight:700;flex-shrink:0">✓</span><span class="tsm">${c}</span></div>`).join('');
+  if(d.pdf_url){const b=document.getElementById('opt-dl');b.href=d.pdf_url;b.classList.remove('hidden');}
+  document.getElementById('opt-next-bar').classList.remove('hidden');
+  document.getElementById('opt-res-card').classList.remove('hidden');
+  loadDash();
+}
+
+function renderLowMatch(d) {
+  rScore(d.analysis); rSkills(d.analysis);
+  document.getElementById('opt-rb').textContent='Score too low for auto-rewrite — work on the missing skills above, then try again.';
+  document.getElementById('opt-cl-card').style.display='none';
+  document.getElementById('opt-next-bar').classList.add('hidden');
+  document.getElementById('opt-res-card').classList.remove('hidden');
+  const g=d.guidance||{};
+  const rm=document.getElementById('opt-roadmap-card');
+  rm.classList.remove('hidden');
+  document.getElementById('opt-rm-assess').textContent=g.honest_assessment||'';
+  const list=g.skill_gap_roadmap||[];
+  document.getElementById('opt-rm-list').innerHTML=list.map(i=>`
+    <div class="rm-card">
+      <div class="flex ac jb"><span class="rm-skill">${i.skill||''}</span><span class="rm-tf">${i.timeframe||''}</span></div>
+      <div class="rm-why">Why: ${i.why_important||''}</div>
+      <div class="rm-how">How: ${i.how_to_learn||''}</div>
+    </div>`).join('');
+  const qw=g.quick_wins||[];
+  document.getElementById('opt-qw').innerHTML=`<div class="txs tf fm" style="width:100%;text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px">Quick Wins</div>`+qw.map(w=>`<span class="tag tg">✓ ${w}</span>`).join('');
+  const alt=g.alternative_roles||[];
+  if(alt.length) document.getElementById('opt-alt').innerHTML=`<div class="txs tf fm" style="text-transform:uppercase;letter-spacing:.07em;margin-bottom:5px">Better-fit roles right now</div>`+alt.map(r=>`<span class="tag tb2">${r}</span>`).join('');
+}
+
+// ── ATS Step 5 (auto-runs on arrival) ─────────────────────────────────────
+function startATS5() {
+  document.getElementById('ats5-run').classList.remove('hidden');
+  document.getElementById('ats5-res').classList.add('hidden');
+  document.getElementById('ats5-regen').classList.add('hidden');
+  if(!SID){document.getElementById('ats5-run').innerHTML='<p class="tsm tf" style="padding:20px 0">No session — go back and optimize first.</p>';return;}
+  const sse=new EventSource(`/api/ats-check?session_id=${SID}`);
+  sse.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    if(d.step==='ats_done'){sse.close();renderATS5(d);}
+    if(d.step==='error'){sse.close();document.getElementById('ats5-run').innerHTML=`<p class="tsm" style="color:var(--rd);padding:20px 0">${d.msg}</p>`;}
+  };
+  sse.onerror=()=>{sse.close();};
+}
+
+function renderATS5(d) {
+  const pass=d.overall_score>=70;
+  const col=d.overall_score>=80?'var(--gn)':d.overall_score>=60?'var(--am)':'var(--rd)';
+  document.getElementById('ats5-run').classList.add('hidden');
+  document.getElementById('ats5-res').classList.remove('hidden');
+  document.getElementById('ats5-scores').innerHTML=`
+    <div class="ats-c"><div class="ats-v" style="color:${col}">${d.overall_score}</div><div class="ats-l">ATS Score /100</div></div>
+    <div class="ats-c"><div class="ats-v">${d.parse_rate}%</div><div class="ats-l">Parse Rate</div></div>
+    <div class="ats-c"><div class="ats-v" style="color:${col}">${d.grade||'—'}</div><div class="ats-l">Grade</div></div>`;
+  document.getElementById('ats5-summary').textContent=d.summary||'';
+  if(pass){
+    document.getElementById('ats5-pass').classList.remove('hidden');
+    document.getElementById('ats5-fail').classList.add('hidden');
+  } else {
+    document.getElementById('ats5-pass').classList.add('hidden');
+    document.getElementById('ats5-fail').classList.remove('hidden');
+    const issues=[...(d.issues||[]),...(d.suggestions||[]),...(d.keyword_misses||[]).map(k=>`Missing keyword: "${k}"`)];
+    document.getElementById('ats5-issues').innerHTML=issues.slice(0,8).map(i=>`<div class="tsm tm" style="padding:4px 0;border-bottom:1px solid var(--bd-l)">→ ${i}</div>`).join('');
+  }
+}
+
+function regenAfterATS() {
+  if(!optJobUrl){alert('No job URL — go back to start.');return;}
+  document.getElementById('ats5-fail').classList.add('hidden');
+  document.getElementById('ats5-regen').classList.remove('hidden');
+  document.getElementById('ats5-res').classList.remove('hidden');
+  document.getElementById('ats5-run').classList.add('hidden');
+  document.getElementById('ats5-regen-btn').disabled=true;
+  // Reset regen progress indicators
+  resetPI(['rp-scr','rp-rwr','rp-pdf','rp-ats'],['ri-scr','ri-rwr','ri-pdf','ri-ats']);
+  setPI('rp-scr','ri-scr','sp');
+  // Re-run full optimization SSE (reuses same session + job URL)
+  const sse=new EventSource(`/api/analyze?session_id=${SID}&job_url=${encodeURIComponent(optJobUrl)}&save=false`);
+  sse.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    const s=d.step;
+    if(s==='scraped'){setPI('rp-scr','ri-scr','ck');setPI('rp-rwr','ri-rwr','sp');}
+    if(s==='rewritten'){setPI('rp-rwr','ri-rwr','ck');setPI('rp-pdf','ri-pdf','sp');}
+    if(s==='pdf_done'){setPI('rp-pdf','ri-pdf','ck');setPI('rp-ats','ri-ats','sp');}
+    if(s==='done'){
+      sse.close();
+      renderDone(d);
+      // Auto re-run ATS
+      const sse2=new EventSource(`/api/ats-check?session_id=${SID}`);
+      sse2.onmessage=e2=>{
+        const d2=JSON.parse(e2.data);
+        if(d2.step==='ats_done'){sse2.close();setPI('rp-ats','ri-ats','ck');renderATS5(d2);}
+        if(d2.step==='error'){sse2.close();setPI('rp-ats','ri-ats','fl');}
+      };
+      sse2.onerror=()=>sse2.close();
+    }
+    if(s==='error'){sse.close();setPI('rp-scr','ri-scr','fl');}
+    if(s==='low_match'){sse.close();setPI('rp-scr','ri-scr','fl');}
+  };
+  sse.onerror=()=>sse.close();
+}
+
+// ── Resume diff ────────────────────────────────────────────────────────────
+function sDiff(w) {
+  document.querySelectorAll('#sec-optimizer .dt button').forEach((b,i)=>b.classList.toggle('active',(i===0&&w==='optimized')||(i===1&&w==='original')));
+  document.getElementById('opt-rb').textContent=w==='optimized'?optOpt:optOrig;
+}
+
+// ── Step 6: Apply ──────────────────────────────────────────────────────────
+async function renderApplyStep() {
+  // Job info
+  const jobEl=document.getElementById('ap6-job');
+  if(optJobUrl) jobEl.innerHTML=`<div class="tsm fm" style="color:var(--nv)">Applying to:</div><div class="tsm mt2"><a href="${optJobUrl}" target="_blank" style="color:var(--or);word-break:break-all">${optJobUrl}</a></div>`;
+  else jobEl.innerHTML='<p class="tsm tf">No job URL — go back to start.</p>';
+  // Profile info
+  const profEl=document.getElementById('ap6-profile');
+  if(SID){
+    try{
+      const r=await fetch(`/api/profile/${SID}`);
+      const p=await r.json();
+      if(p.email){
+        profEl.innerHTML=`<div class="nt ns" style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px">
+          ${p.full_name?`<div class="tsm"><span class="tf">Name</span><br><strong>${p.full_name}</strong></div>`:''}
+          ${p.email?`<div class="tsm"><span class="tf">Email</span><br><strong>${p.email}</strong></div>`:''}
+          ${p.phone?`<div class="tsm"><span class="tf">Phone</span><br>${p.phone}</div>`:''}
+          ${p.city?`<div class="tsm"><span class="tf">City</span><br>${p.city}</div>`:''}
+        </div>`;
+      } else {
+        profEl.innerHTML=`<div class="nt nw">Profile incomplete — <button class="btn bo bsm" onclick="goto('resume')">Fill in Resume Builder → Profile</button></div>`;
+      }
+    }catch(e){profEl.innerHTML='';}
+  }
+  // Reset apply UI
+  document.getElementById('ap-pl').style.display='none';
+  document.getElementById('ap-res').classList.add('hidden');
+}
+
+function triggerApply() {
+  if(!optJobUrl){alert('No job URL. Run optimizer first.');return;}
+  const pl=document.getElementById('ap-pl');
+  const res=document.getElementById('ap-res');
+  window._applyLog=[];
+  pl.style.display=''; res.classList.add('hidden'); res.innerHTML='';
+  pl.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Launching browser agent...</span></div>`;
+  const sse=new EventSource(`/api/auto-apply?session_id=${SID}&job_url=${encodeURIComponent(optJobUrl)}`);
+  sse.onmessage=e=>{const d=JSON.parse(e.data);handleApplyEv(d,pl,res);if(['applied','error','apply_unavailable','no_profile'].includes(d.step))sse.close();};
+  sse.onerror=()=>sse.close();
+}
+
+function ensureApplyView(res){
+  res.classList.remove('hidden');
+  if(!document.getElementById('ap-shot')){
+    res.innerHTML=`<div class="tsm tf" style="margin-bottom:6px">Live progress — the agent fills the application page-by-page until it submits:</div>
+      <div id="ap-log" style="max-height:210px;overflow:auto;border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin-bottom:8px;line-height:1.5"></div>
+      <div class="tsm tf" style="margin-bottom:6px">Agent's browser:</div>
+      <img id="ap-shot" style="width:100%;border:1px solid var(--bd);border-radius:8px;display:block" alt="agent view"/>
+      <div id="ap-qa" class="mt2"></div>`;
+    renderApplyLog();
+  }
+}
+
+// Live page-by-page timeline: each agent notify becomes a row; the latest spins,
+// earlier ones are checked off — so the whole continuous run is visible at a glance.
+function pushApplyLog(msg){
+  if(!msg) return;
+  window._applyLog = window._applyLog || [];
+  for(const e of window._applyLog) e.done = true;
+  window._applyLog.push({msg, done:false});
+  if(window._applyLog.length > 50) window._applyLog.shift();
+  renderApplyLog();
+}
+function finishApplyLog(){
+  for(const e of (window._applyLog||[])) e.done = true;
+  renderApplyLog();
+}
+function renderApplyLog(){
+  const box=document.getElementById('ap-log'); if(!box) return;
+  box.innerHTML=(window._applyLog||[]).map(e=>
+    `<div style="display:flex;gap:8px;align-items:flex-start;padding:1px 0">
+       <span style="flex:none;width:14px;text-align:center">${e.done
+         ? '<span style="color:var(--gn,#16a34a)">✓</span>'
+         : '<span class="spin" style="width:11px;height:11px;display:inline-block;vertical-align:-1px"></span>'}</span>
+       <span style="word-break:break-word">${(e.msg||'').replace(/</g,'&lt;')}</span>
+     </div>`).join('');
+  box.scrollTop=box.scrollHeight;
+}
+
+async function submitApplyAnswer(){
+  const el=document.getElementById('ap-ans');
+  if(!el)return;
+  const ans=el.value.trim();
+  if(!ans)return;
+  el.disabled=true;
+  try{
+    await fetch('/api/apply-answer',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({session_id:SID,answer:ans})});
+  }catch(e){}
+  document.getElementById('ap-pl').innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Sent — agent continuing...</span></div>`;
+  document.getElementById('ap-res').classList.add('hidden');
+}
+
+function triggerApplyUrl(url) {
+  optJobUrl=url; oGo(6);
+}
+
+function handleApplyEv(d,pl,res) {
+  if(d.step==='applying'){
+    pl.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>${(d.msg||'Working…').replace(/</g,'&lt;')}</span></div>`;
+    ensureApplyView(res); pushApplyLog(d.msg); return;
+  }
+  if(d.step==='shot'){
+    if(d.url){ ensureApplyView(res); document.getElementById('ap-shot').src=d.url+'?t='+Date.now(); }
+    return;
+  }
+  if(d.step==='question'){
+    pl.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Agent needs your input</span></div>`;
+    ensureApplyView(res);
+    if(d.shot) document.getElementById('ap-shot').src=d.shot+'?t='+Date.now();
+    document.getElementById('ap-qa').innerHTML=`<div class="nt nw"><strong>The agent needs your help:</strong>
+      <div class="mt2" style="white-space:pre-wrap">${(d.msg||'').replace(/</g,'&lt;')}</div>
+      <div class="mt2" style="display:flex;gap:8px">
+        <input id="ap-ans" class="inp" type="text" style="flex:1" placeholder="Type your answer, or 'skip' / 'cancel'..." onkeydown="if(event.key==='Enter')submitApplyAnswer()"/>
+        <button class="btn bn bsm" onclick="submitApplyAnswer()">Send</button>
+      </div></div>`;
+    setTimeout(()=>{const el=document.getElementById('ap-ans');if(el){el.focus();el.scrollIntoView({block:'nearest',behavior:'smooth'});}},60);
+    return;
+  }
+  if(d.step==='no_profile'){
+    pl.innerHTML=`<div class="pi er"><div class="ico fl"><svg width="9" height="9" viewBox="0 0 9 9" fill="var(--rd)"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Profile incomplete</span></div>`;
+    res.classList.remove('hidden');res.innerHTML=`<div class="nt nw">Fill in your email &amp; phone in <strong>Resume Builder → Profile</strong> first.</div>`;return;
+  }
+  if(d.step==='apply_unavailable'){
+    pl.innerHTML=`<div class="pi er"><div class="ico fl"><svg width="9" height="9" viewBox="0 0 9 9" fill="var(--rd)"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Playwright not installed</span></div>`;
+    res.classList.remove('hidden');res.innerHTML=`<div class="nt nw">Run: <code>playwright install chromium</code></div>`;return;
+  }
+  if(d.step==='applied'){
+    const ok=d.status==='success';
+    finishApplyLog();
+    pushApplyLog(ok?`🎉 Application submitted via ${d.portal||'portal'}`:`Finished (${d.status||'incomplete'})`);
+    finishApplyLog();
+    pl.innerHTML=`<div class="pi ${ok?'dk':'er'}"><div class="ico ${ok?'ck':'fl'}"></div><span>${ok?'Submitted!':'Incomplete'} via ${d.portal||'portal'}</span></div>`;
+    const filled=(d.fields_filled||[]).map(f=>`<span class="tag tg">${f}</span>`).join('');
+    const banner=document.createElement('div');
+    banner.className=`nt ${ok?'ns':'nw'}`; banner.style.marginBottom='8px';
+    banner.innerHTML=`<strong>${ok?'🎉 Application Submitted!':'Done'}</strong>${d.company?' — '+d.company:''}${d.job_title?' · '+d.job_title:''}${filled?`<div class="mt2">${filled}</div>`:''}${d.error?`<div class="mt2 txs">${(d.error||'').slice(0,200)}</div>`:''}`;
+    ensureApplyView(res);
+    const logBox=document.getElementById('ap-log');
+    if(logBox&&logBox.parentNode) logBox.parentNode.insertBefore(banner, logBox);
+    else { res.classList.remove('hidden'); res.prepend(banner); }
+    loadDash();return;
+  }
+  if(d.step==='error'){
+    pl.innerHTML=`<div class="pi er"><div class="ico fl"><svg width="9" height="9" viewBox="0 0 9 9" fill="var(--rd)"><circle cx="4.5" cy="4.5" r="3.5"/></svg></div><span>Agent error</span></div>`;
+    res.classList.remove('hidden');res.innerHTML=`<div class="nt nw"><strong>Auto-apply failed:</strong><div class="mt2 txs" style="font-family:monospace;white-space:pre-wrap;word-break:break-word">${(d.msg||'Unknown error').replace(/</g,'&lt;')}</div></div>`;
+  }
+}
+
+// ── Job Feed ─────────────────────────────────────────────────────────────────
+let _jfRefreshTimer=null;
+let _jfLastJobIds=new Set();
+
+// Auto-refresh every 15 min while job feed tab is open
+function _jfStartAutoRefresh(){
+  _jfStopAutoRefresh();
+  _jfRefreshTimer=setInterval(()=>{
+    if(document.getElementById('sec-jobfeed').classList.contains('active')) searchJobs(true);
+  },15*60*1000);
+}
+function _jfStopAutoRefresh(){if(_jfRefreshTimer){clearInterval(_jfRefreshTimer);_jfRefreshTimer=null;}}
+
+async function searchJobs(silent=false) {
+  const role=(document.getElementById('jf-role').value.trim()||'AI/ML engineer');
+  const tf=document.getElementById('jf-time').value;
+  const locs=pillVals('jf-locs').join(',') || 'Bengaluru';
+  const exps=pillVals('jf-exps').filter(v=>v!=='').join(',');  // empty string = Any → skip
+  const big=document.getElementById('jf-big').checked;
+  const res=document.getElementById('jf-results');
+  const ld=document.getElementById('jf-load');
+  const hint=document.getElementById('jf-hint');
+  if(!silent){res.innerHTML='';batchSelected.clear();updateBatchBar();}
+  ld.classList.remove('hidden');
+  document.getElementById('jf-load-msg').textContent='Searching LinkedIn with synonyms...';
+
+  // Show synonym hint
+  const synMap={
+    'ai/ml':['AI engineer','ML engineer','Applied Scientist','Data Scientist'],
+    'ai engineer':['GenAI engineer','LLM engineer','ML engineer'],
+    'ml engineer':['Machine Learning Engineer','AI engineer'],
+    'data scientist':['Applied Scientist','Research Scientist','Quantitative Researcher'],
+    'llm':['GenAI engineer','AI engineer'],
+    'generative ai':['LLM engineer','AI engineer'],
+  };
+  const rl=role.toLowerCase();
+  let synHint='';
+  for(const[k,v]of Object.entries(synMap)){if(rl.includes(k)){synHint=v.join(', ');break;}}
+  if(synHint){hint.style.display='';document.getElementById('jf-terms').textContent=synHint;}
+  else{hint.style.display='none';}
+
+  try {
+    const params=new URLSearchParams({role,time_filter:tf,limit:25,locations:locs,exp_levels:exps,big_tech_only:big});
+    const r=await fetch(`/api/jobs?${params}`);
+    const jobs=await r.json();
+    ld.classList.add('hidden');
+
+    // Detect new jobs since last fetch
+    const newIds=new Set(jobs.map(j=>j.url));
+    const newCount=silent?[...newIds].filter(id=>!_jfLastJobIds.has(id)).length:0;
+    _jfLastJobIds=newIds;
+
+    // Update "last updated" timestamp
+    const now=new Date();
+    document.getElementById('jf-updated').textContent=`Updated ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+    if(!jobs.length){
+      res.innerHTML='<div class="nt nw">No jobs found. Try a broader search or longer time window.</div>';
+      return;
+    }
+
+    // New jobs toast
+    if(newCount>0){
+      const toast=document.createElement('div');
+      toast.className='nt ns tsm';
+      toast.style.cssText='margin-bottom:8px;animation:fadeIn .3s';
+      toast.innerHTML=`<strong>${newCount} new job${newCount>1?'s':''}</strong> found since last check`;
+      res.prepend(toast);
+      setTimeout(()=>toast.remove(),5000);
+    }
+
+    const SOURCE_BADGE={
+      linkedin:'<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(0,112,243,.1);color:#0070f3">in</span>',
+    };
+
+    const cards=jobs.map((j,i)=>{
+      const ini=(j.company||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase()||'?';
+      const badge=SOURCE_BADGE[j.source]||'';
+      const tagsHtml=(j.tags||[]).slice(0,4).map(t=>`<span class="tag tg" style="font-size:10px;margin-right:4px">${t}</span>`).join('');
+      const postedFmt=j.posted?j.posted.slice(0,10):'';
+      const isNew=silent&&!_jfLastJobIds.has(j.url);
+      return `<div class="jc${isNew?' sel':''}" id="jc-${i}">
+        <input type="checkbox" class="chk" onchange="toggleBatch(${i},'${encodeURIComponent(j.url)}','${encodeURIComponent(j.title)}','${encodeURIComponent(j.company)}')" id="cb-${i}"/>
+        <div class="jl">${ini}</div>
+        <div class="ji" style="flex:1;min-width:0">
+          <div class="jt">${badge} ${j.title}</div>
+          <div class="jm">${j.company} · ${j.location}${tagsHtml?` · `+tagsHtml:''}</div>
+        </div>
+        <div class="jp" style="white-space:nowrap">${postedFmt}</div>
+        <div class="flex gap2 sh" style="margin-left:8px" id="ja-${i}">
+          <a href="${j.url}" target="_blank" class="btn bo bsm">View</a>
+          <button class="btn bp bsm" onclick="feedApply('${encodeURIComponent(j.url)}','${encodeURIComponent(j.title)}','${encodeURIComponent(j.company)}',${i})">Apply</button>
+        </div>
+      </div>`;
+    }).join('');
+
+    if(silent){
+      // replace existing cards but keep toast if added
+      const existing=res.querySelector('.jc');
+      if(existing) existing.parentNode.innerHTML=(res.querySelector('.nt.ns')||'').outerHTML+cards;
+      else res.innerHTML=cards;
+    } else {
+      res.innerHTML=cards;
+    }
+  } catch(e){
+    ld.classList.add('hidden');
+    res.innerHTML=`<div class="nt ne">Search failed: ${e.message}</div>`;
+  }
+}
+
+function toggleBatch(idx,eUrl,eTitle,eCompany) {
+  const cb=document.getElementById('cb-'+idx);
+  const key=`${idx}__${eUrl}__${eTitle}__${eCompany}`;
+  if(cb.checked) batchSelected.add(key); else batchSelected.delete(key);
+  document.getElementById('jc-'+idx).classList.toggle('sel',cb.checked);
+  updateBatchBar();
+}
+function updateBatchBar() {
+  const bar=document.getElementById('batch-bar');
+  bar.classList.toggle('hidden',batchSelected.size===0);
+  document.getElementById('batch-cnt').textContent=batchSelected.size;
+}
+function clearBatch() {
+  batchSelected.clear(); updateBatchBar();
+  document.querySelectorAll('.chk').forEach(c=>c.checked=false);
+  document.querySelectorAll('.jc').forEach(c=>c.classList.remove('sel'));
+}
+
+async function batchApply() {
+  if(!SID){alert('Upload your resume first.');goto('resume');return;}
+  const items=[...batchSelected].map(k=>{const[idx,eUrl,eTitle,eComp]=k.split('__');return{idx,url:decodeURIComponent(eUrl),title:decodeURIComponent(eTitle),company:decodeURIComponent(eComp)};});
+  clearBatch();
+  for(const item of items) {
+    await feedApplyAsync(item.url,item.title,item.company,parseInt(item.idx));
+  }
+}
+
+function feedApply(eUrl,eTitle,eComp,idx) {
+  feedApplyAsync(decodeURIComponent(eUrl),decodeURIComponent(eTitle),decodeURIComponent(eComp),idx);
+}
+
+function feedApplyAsync(url,title,company,idx) {
+  return new Promise(resolve=>{
+    if(!SID){alert('Upload resume first.');goto('resume');resolve();return;}
+    const acts=document.getElementById('ja-'+idx);
+    acts.innerHTML=`<span class="tsm tm flex ac gap2"><div class="spin"></div>Tailoring…</span>`;
+
+    const sse=new EventSource(`/api/analyze?session_id=${SID}&job_url=${encodeURIComponent(url)}&save=true`);
+    let score=0, pdfUrl='';
+    sse.onmessage=e=>{
+      const d=JSON.parse(e.data);
+      if(d.step==='analyzed') score=d.score;
+      if(d.step==='done'){
+        sse.close(); pdfUrl=d.pdf_url;
+        acts.innerHTML=`<span class="tsm flex ac gap2" style="color:var(--gn);font-weight:600">✓ ${score}/100</span>
+          <button class="btn bn bsm" onclick="autoApplyFeed('${encodeURIComponent(url)}',this)">Auto-Apply</button>
+          ${pdfUrl?`<a href="${pdfUrl}" download class="btn bo bsm">PDF</a>`:''}`;
+        resolve();
+      }
+      if(d.step==='low_match'){
+        sse.close();
+        acts.innerHTML=`<span class="tsm" style="color:var(--am);font-weight:600">Low ${d.score}/100</span>`;
+        resolve();
+      }
+      if(d.step==='error'){sse.close();acts.innerHTML=`<span class="tsm" style="color:var(--rd)">Error</span>`;resolve();}
+    };
+    sse.onerror=()=>{sse.close();resolve();};
+  });
+}
+
+function autoApplyFeed(eUrl, btn) {
+  const url=decodeURIComponent(eUrl);
+  btn.disabled=true; btn.textContent='Applying…';
+  optJobUrl=url;
+  goto('optimizer'); oGo(4);
+  triggerApplyUrl(url);
+}
+
+// ── Resume Update ──────────────────────────────────────────────────────────
+function startUpdate() {
+  if(!SID){alert('Upload your resume first.');return;}
+  const desc=document.getElementById('upd-desc').value.trim();
+  if(!desc){alert('Please describe what changed.');return;}
+
+  document.getElementById('upd-prog-card').classList.remove('hidden');
+  document.getElementById('upd-result-card').classList.add('hidden');
+  resetPI(['up-mrg','up-rwr','up-pdf'],['ui-mrg','ui-rwr','ui-pdf']);
+
+  const sse=new EventSource(`/api/resume-update?session_id=${SID}&description=${encodeURIComponent(desc)}`);
+  sse.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    if(d.step==='merging'){setPI('up-mrg','ui-mrg','sp');return;}
+    if(d.step==='rewritten'){setPI('up-mrg','ui-mrg','ck');setPI('up-rwr','ui-rwr','ck');return;}
+    if(d.step==='pdf'){setPI('up-pdf','ui-pdf','sp');return;}
+    if(d.step==='done'){
+      sse.close();
+      setPI('up-pdf','ui-pdf','ck');
+      const rc=document.getElementById('upd-result-card');
+      rc.classList.remove('hidden');
+      const chg=d.changes||[];
+      document.getElementById('upd-chg').innerHTML=chg.map(c=>`<div class="flex gap2 mt2"><span style="color:var(--gn);font-weight:700;flex-shrink:0">✓</span><span class="tsm">${c}</span></div>`).join('');
+      document.getElementById('upd-rb').textContent=d.updated_text||'';
+      if(d.pdf_url){const b=document.getElementById('upd-dl');b.href=d.pdf_url;b.classList.remove('hidden');}
+    }
+    if(d.step==='error'){sse.close();setPI('up-mrg','ui-mrg','fl');alert(d.msg);}
+  };
+  sse.onerror=()=>sse.close();
+}
+
+// ── LinkedIn setup ─────────────────────────────────────────────────────────
+async function checkLiStatus() {
+  const box=document.getElementById('li-status-box');
+  try {
+    const r=await fetch('/api/linkedin-status');
+    const d=await r.json();
+    if(d.logged_in) {
+      box.innerHTML=`<div class="nt ns flex ac gap2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>LinkedIn session active — ${d.cookie_count} cookies saved. Auto-apply is ready.</div>`;
+    } else {
+      box.innerHTML=`<div class="nt nw">No LinkedIn session found. Log in below to enable auto-apply.</div>`;
+    }
+  } catch(e) { box.innerHTML=`<div class="nt ne">Could not check status.</div>`; }
+}
+
+function liLogin() {
+  const prog=document.getElementById('li-prog');
+  prog.classList.remove('hidden');
+  prog.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Launching browser...</span></div>`;
+
+  const sse=new EventSource('/api/linkedin-login');
+  sse.onmessage=e=>{
+    const d=JSON.parse(e.data);
+    if(d.step==='launching'||d.step==='waiting'||d.step==='applying'){
+      prog.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>${d.msg}</span></div>`;
+    }
+    if(d.step==='info'){
+      sse.close();
+      prog.innerHTML=`<div class="pi"><div class="ico ck"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="var(--gn)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div><span>${d.msg}</span></div>`;
+    }
+    if(d.step==='done'){
+      sse.close();
+      prog.innerHTML=`<div class="pi dk"><div class="ico ck"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="var(--gn)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div><span>${d.msg}</span></div>`;
+      checkLiStatus();
+    }
+    if(d.step==='error'){
+      sse.close();
+      prog.innerHTML=`<div class="pi er"><div class="ico fl"></div><span>${d.msg}</span></div>`;
+    }
+  };
+  sse.onerror=()=>sse.close();
+}
+
+// ── Resume Builder tabs ────────────────────────────────────────────────────
+function rbTab(t) {
+  ['profile','upload','update','linkedin'].forEach(n=>{
+    document.getElementById('rb-'+n).classList.toggle('hidden',n!==t);
+  });
+  document.querySelectorAll('#sec-resume .tab').forEach((b,i)=>{
+    b.classList.toggle('active',['profile','upload','update','linkedin'][i]===t);
+  });
+  if(t==='linkedin') checkLiStatus();
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────────────
+async function loadDash() {
+  if(!SID) return;
+  try {
+    const r=await fetch(`/api/dashboard?session_id=${SID}`);
+    const d=await r.json();
+    const s=d.stats;
+    document.getElementById('st-tot').textContent=s.total;
+    document.getElementById('st-sub').textContent=s.submitted;
+    document.getElementById('st-tai').textContent=s.tailored;
+    document.getElementById('st-wk').textContent=s.this_week;
+    document.getElementById('bx-apps').textContent=s.total;
+    renderTable(d.applications);
+  } catch(e){}
+}
+
+const STATUSES=['Applied','Tailored','Submitted','Interview','Offer','Rejected','Failed'];
+
+function renderTable(apps) {
+  const el=document.getElementById('app-table');
+  if(!apps.length){
+    el.innerHTML=`<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg><p>No applications yet.</p><p class="txs mt2">Use <strong>Job Feed</strong> or <strong>Optimizer</strong> to get started.</p></div>`;
+    return;
+  }
+  el.innerHTML=`<div class="tw"><table>
+    <thead><tr><th>Role</th><th>Company</th><th>Match</th><th>Status</th><th>Applied On</th><th>Actions</th></tr></thead>
+    <tbody>${apps.map(a=>`
+      <tr>
+        <td class="fm">${a.job_title||'—'}</td>
+        <td>${a.company||'—'}</td>
+        <td>${a.match_score?`<span class="tag tb2">${a.match_score}/100</span>`:'—'}</td>
+        <td>
+          <select class="st-sel st-${a.status}" onchange="updateStatus(${a.id},this)">
+            ${STATUSES.map(s=>`<option${s===a.status?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </td>
+        <td class="tf">${a.applied_on||a.created_at?.slice(0,10)||'—'}</td>
+        <td><div class="flex gap2">
+          ${a.resume_url?`<a href="${a.resume_url}" target="_blank" class="btn bo bsm">PDF</a>`:''}
+          ${a.job_url?`<a href="${a.job_url}" target="_blank" class="btn bo bsm">Job</a>`:''}
+          <button class="btn bgh bsm" onclick="delApp(${a.id})">✕</button>
+        </div></td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+async function updateStatus(id,sel) {
+  const status=sel.value;
+  sel.className=`st-sel st-${status}`;
+  await fetch(`/api/application/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+  loadDash();
+}
+async function delApp(id){if(!confirm('Remove?'))return;await fetch(`/api/application/${id}`,{method:'DELETE'});loadDash();}
+
+// ── Add modal ──────────────────────────────────────────────────────────────
+function showAddModal(){document.getElementById('add-modal').style.display='flex';}
+function closeModal(){document.getElementById('add-modal').style.display='none';}
+async function submitModal(){
+  await fetch('/api/application',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    session_id:SID||'manual',
+    job_title:document.getElementById('am-t').value,
+    company:document.getElementById('am-c').value,
+    job_url:document.getElementById('am-u').value,
+    status:document.getElementById('am-s').value,
+    applied_on:document.getElementById('am-d').value,
+  })});
+  closeModal(); loadDash();
+}
+
+// ── Profile ────────────────────────────────────────────────────────────────
+async function loadProfile(){
+  if(!SID) return;
+  try{
+    const r=await fetch(`/api/profile/${SID}`);
+    const p=await r.json(); if(!p.session_id) return;
+    const m={'pf-name':'full_name','pf-email':'email','pf-phone':'phone','pf-city':'city','pf-li':'linkedin','pf-gh':'github','pf-tt':'current_title','pf-ex':'years_experience','pf-np':'notice_period','pf-ec':'expected_ctc','pf-cc':'current_ctc'};
+    Object.entries(m).forEach(([id,k])=>{const el=document.getElementById(id);if(el)el.value=p[k]||'';});
+  }catch(e){}
+}
+async function saveProfile(){
+  if(!SID){alert('Upload your resume first.');return;}
+  const body={full_name:$('pf-name'),email:$('pf-email'),phone:$('pf-phone'),city:$('pf-city'),linkedin:$('pf-li'),github:$('pf-gh'),current_title:$('pf-tt'),years_experience:$('pf-ex'),notice_period:$('pf-np'),expected_ctc:$('pf-ec'),current_ctc:$('pf-cc')};
+  await fetch(`/api/profile/${SID}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const ok=document.getElementById('pf-ok'); ok.classList.remove('hidden'); setTimeout(()=>ok.classList.add('hidden'),3000);
+}
+function $(id){return document.getElementById(id)?.value||'';}
+
+// ── Shared helpers ─────────────────────────────────────────────────────────
+function rScore(a){
+  const score=a?.score||0, lvl=a?.match_level||'—';
+  document.getElementById('opt-sv').textContent=score;
+  document.getElementById('opt-sl').textContent=lvl+(a?.estimated_time_to_ready?` · Ready in ${a.estimated_time_to_ready}`:'');
+  document.getElementById('opt-sr').textContent=a?.score_rationale||'';
+  const C=264, off=C-(score/100)*C;
+  const col=score>=70?'var(--gn)':score>=50?'var(--am)':'var(--rd)';
+  const ring=document.getElementById('opt-ring');
+  if(ring){setTimeout(()=>{ring.style.strokeDashoffset=off;ring.style.stroke=col;},100);}
+  const sl=document.getElementById('opt-sl'); if(sl) sl.style.color=col;
+}
+function rSkills(a){
+  document.getElementById('opt-mtch').innerHTML=(a?.matched_skills||[]).map(s=>`<span class="tag tg">✓ ${s}</span>`).join('');
+  document.getElementById('opt-miss').innerHTML=(a?.missing_critical||[]).map(s=>`<span class="tag tr">✗ ${s}</span>`).join('');
+  const kw=a?.ats_keywords_to_add||[];
+  if(kw.length){document.getElementById('opt-atsr').style.display='';document.getElementById('opt-atkw').innerHTML=kw.map(k=>`<span class="tag ta">${k}</span>`).join('');}
+}
+function setPI(pp,pi,state){
+  const el=document.getElementById(pp), ico=document.getElementById(pi);
+  if(!el||!ico) return;
+  el.className='pi'+(state==='ck'?' dk':state==='sp'?' ac':state==='fl'?' er':'');
+  if(state==='sp'){ico.className='ico sp';ico.innerHTML='<div class="spin"></div>';}
+  else if(state==='ck'){ico.className='ico ck';ico.innerHTML='<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="var(--gn)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';}
+  else if(state==='fl'){ico.className='ico fl';ico.innerHTML='<svg width="9" height="9" viewBox="0 0 9 9" fill="var(--rd)"><circle cx="4.5" cy="4.5" r="3.5"/></svg>';}
+}
+function resetPI(pps,pis){
+  pps.forEach((pp,i)=>{
+    const el=document.getElementById(pp),ico=document.getElementById(pis[i]);
+    if(el)el.className='pi';
+    if(ico){ico.className='ico wt';ico.innerHTML='<svg width="9" height="9" viewBox="0 0 9 9" fill="#9CA3AF"><circle cx="4.5" cy="4.5" r="3.5"/></svg>';}
+  });
+}
+function showEl(id,html){const el=document.getElementById(id);el.classList.remove('hidden');el.innerHTML=html;}
+function showNt(id,msg){const el=document.getElementById(id);el.classList.remove('hidden');el.textContent=msg;}
+</script>
+</body>
+</html>

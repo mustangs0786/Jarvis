@@ -1,0 +1,32 @@
+# Environment
+.env
+
+# Generated files — don't commit user data
+temp_resumes/
+output/
+user_profiles/
+runs/
+browser_profile/
+linkedin_cookies.json
+job_wiki.json
+careerai.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.uv/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+workday_pages

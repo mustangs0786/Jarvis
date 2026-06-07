@@ -1,0 +1,19 @@
+[Unit]
+Description=Resume Builder — autonomous job auto-apply web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+WorkingDirectory=/home/azureuser/Resume_Builder
+Environment=PYTHONUNBUFFERED=1
+# Reads GEMINI/OpenAI/Azure keys etc. from .env via python-dotenv (load_dotenv in app.py).
+# xvfb-run gives the headful Chromium (headless=False) a virtual display so it runs on a
+# screenless VM. The app itself streams screenshots back to judges over SSE.
+ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x900x24" /home/azureuser/.local/bin/uv run uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

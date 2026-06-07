@@ -1,0 +1,10 @@
+# Replace YOUR_FQDN with your VM's DNS name, e.g.
+#   resume-apply-demo.eastus.cloudapp.azure.com
+# Caddy fetches a free Let's Encrypt cert automatically → judges get https://.
+YOUR_FQDN {
+	reverse_proxy localhost:8000 {
+		# flush_interval -1 disables response buffering so Server-Sent Events
+		# (the live screenshot/log timeline) stream to judges in real time.
+		flush_interval -1
+	}
+}
