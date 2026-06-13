@@ -162,6 +162,32 @@ async def dispatch_action(page, action: dict, resume_path: str,
 
         elif act == "click":
             await el.scroll_into_view_if_needed()
+            # Clicking a native <select> opens the OS popup Playwright can't
+            # drive — the planner sometimes emits 'click' for them; refuse.
+            tag = (await el.evaluate("e => e.tagName")).lower()
+            if tag == "select":
+                logger.info(f"  Refusing raw click on native <select> [{label}]")
+                return False
+            # NEVER click legal/policy links — they navigate off the form.
+            # (Vision recovery once clicked Glean's "Applicant Arbitration
+            # Agreement" because the form text says "I confirm I have read…".)
+            # No LLM decision may override this.
+            if True:  # any element may sit INSIDE a link (<strong> in <a>) — check closest anchor
+                href = (await el.evaluate(
+                    "e => { const a = e.closest ? e.closest('a') : null;"
+                    " return a ? (a.href || '') : (e.href || ''); }") or "").lower()
+                txt = (label or "").lower()
+                _legal = ("arbitration", "privacy", "terms", "policy", "cookie",
+                          "agreement", "definitions", "gdpr", "disclosure")
+                if any(k in href or k in txt for k in _legal):
+                    logger.info(f"  Refusing click on legal/policy link [{label}]")
+                    return False
+                if href.startswith("http"):
+                    from urllib.parse import urlparse
+                    h, p = urlparse(href).netloc, urlparse(page.url).netloc
+                    if h and p and h.split(".")[-2:] != p.split(".")[-2:]:
+                        logger.info(f"  Refusing click on off-site link [{label}] → {href[:50]}")
+                        return False
             await el.click()
             logger.info(f"  Clicked: {label}")
             await page.wait_for_timeout(400)
@@ -172,16 +198,29 @@ async def dispatch_action(page, action: dict, resume_path: str,
             await el.scroll_into_view_if_needed()
             tag = (await el.evaluate("e => e.tagName")).lower()
             if tag == "select":
+                val_s = str(value or "").strip()
+                _ph = ("please select", "select one", "select an option", "choose", "--")
+                def _is_placeholder(o):
+                    ol = o.lower().strip()
+                    return any(ol == p or ol.startswith(p) for p in _ph)
                 options = [o.strip() for o in await el.locator("option").all_inner_texts() if o.strip()]
-                best = next(
-                    (o for o in options if str(value).lower() in o.lower() or o.lower() in str(value).lower()),
-                    None
-                )
+                best = None
+                if val_s:  # empty value must NOT match (''-in-anything is always true)
+                    best = next(
+                        (o for o in options if not _is_placeholder(o)
+                         and (val_s.lower() in o.lower() or o.lower() in val_s.lower())),
+                        None
+                    )
                 if best:
                     await el.select_option(label=best, timeout=5000)
                     logger.info(f"  Native select: {label} = {best}")
                     filled_selectors.add(selector)
                     return True
+                # NEVER fall through to the combobox path for a native <select>:
+                # clicking it opens the OS-level select popup, which Playwright
+                # cannot drive and which blocks every later action on the page.
+                logger.info(f"  Native select: no option match for {value!r} [{label}]")
+                return False
 
             # ── Custom combobox (Workday / React listboxes) ─────────────────
             # Strategy: open dropdown -> try a series of search terms (most

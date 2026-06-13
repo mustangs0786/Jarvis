@@ -29,6 +29,8 @@ import re
 import glob
 import base64
 
+from urllib.parse import urlparse
+
 from auto_agent import (collect_elements, execute_action, upload_in_frames,
                         settle, switch_if_new_tab, FLASH_MODEL, annotate_screenshot,
                         dismiss_overlays, clear_blocking_overlays)
@@ -149,6 +151,12 @@ def _cache_get(profile, label, val):
     return None
 
 def _cache_set(profile, user_id, label, val, option):
+    # Poison guard: never persist an option unrelated to the intended value
+    # (a mis-snapped multiselect once cached 'Asian' for a decline answer and
+    # re-broke every later run on that form).
+    if val and option and not _related(val, option):
+        print(f"     (cache skipped: {option!r} unrelated to {val!r})")
+        return
     r = profile.setdefault("_resolved", {})
     r[_ck(label, val)] = option          # raw (exact, backward compatible)
     r[_ck_norm(label, val)] = option     # normalized stem (stable across runs)
@@ -342,11 +350,15 @@ async def _scrape_options(page, idx, type_hint=None):
             words = re.findall(r"[a-zA-Z]{3,}", str(type_hint))
             present = any(need in o.lower() or any(w.lower() in o.lower() for w in words)
                           for o in opts)
-            if not opts or not present:
+            if not present and not opts:
+                # Only type to filter when we have NO options at all (virtualized
+                # list). If we already scraped options (even non-matching ones like
+                # "0-2"/"3-8"/"9+"), typing the hint ("years") into a non-searchable
+                # dropdown just corrupts its state.
                 term = words[0] if words else str(type_hint)
                 try:
                     await page.keyboard.type(term, delay=45)
-                    await page.wait_for_timeout(750)   # let the typeahead filter
+                    await page.wait_for_timeout(750)
                     opts2 = _clean(await page.evaluate(_OPT_JS) or [])
                     if opts2:
                         opts = opts2
@@ -480,10 +492,13 @@ async def _resolve_choice_core(idx, label, profile_value, options, profile,
     if not options:
         return Resolution(profile_value, "raw (no options)")
     # Sensitive (EEO) with no known value -> pick the 'decline to answer' option.
+    # NEVER falls through to the LLM (it would guess demographics, e.g. 'Asian'
+    # from an Indian profile). If no decline option is visible (virtualized /
+    # empty scrape), use the near-universal EEO decline text — the typeahead
+    # snaps to it.
     if not profile_value and _is_sensitive_label(label):
         d = _find_decline_option(options)
-        if d:
-            return Resolution(d, "decline")
+        return Resolution(d or "Decline to self identify", "decline" if d else "decline-default")
     # Cache (keyed by label|value, or label|"" for value-less questions).
     cached = _cache_get(profile, label, profile_value or "")
     if cached:
@@ -1064,9 +1079,84 @@ async def _select_once(page, idx, term):
     chip = await _selected_chip(page, idx)
     if chip:
         return chip
-    if await _field_shows_value(page, idx):
+    # React-select: check for a committed single-value element, NOT the input's
+    # typed text. After typing "years" + Enter on a non-searchable dropdown,
+    # the input still shows "years" but no option was actually selected —
+    # _field_shows_value reads e.value and falsely reports success.
+    try:
+        sv = await page.locator(f'[data-agent-idx="{idx}"]').first.evaluate(
+            """el => {
+                const c = el.closest('.select__control, .select-shell, '
+                  + '.select__value-container, [class*="singleValue"], '
+                  + '[class*="select-container"], [class*="selectContainer"]')
+                  || el.parentElement || el;
+                const sv = c.querySelector('[class*="single-value"], [class*="singleValue"]');
+                return sv ? sv.innerText.trim() : '';
+            }""")
+        if sv:
+            return sv
+    except Exception:
+        pass
+    # For native inputs / non-react-select: fall back to the original check,
+    # but only if the field is NOT a react-select (input inside .select__control).
+    try:
+        is_react = await page.locator(f'[data-agent-idx="{idx}"]').first.evaluate(
+            "el => !!el.closest('[class*=\"select__\"], [class*=\"react-select\"]')")
+    except Exception:
+        is_react = False
+    if not is_react and await _field_shows_value(page, idx):
         return await _field_display_text(page, idx) or str(term)
     return ""
+
+async def _open_and_click_option(page, idx, target):
+    """Commit a NON-searchable react-select (e.g. options '0-2','3-8','9+'):
+    open the control, then CLICK the option whose text matches `target` using
+    Playwright's has_text filter (fast + precise — iterating raw [role=option]
+    hit 247 hidden phone-country items and timed the dropdown out). Verifies via
+    the control's own single-value. Returns the value shown, or ''."""
+    sel = f'[data-agent-idx="{idx}"]'
+    try:
+        loc = page.locator(sel).first
+        await loc.scroll_into_view_if_needed(timeout=2000)
+        await loc.click(timeout=3000, force=True)            # open
+        try:  # clear any stale typeahead filter from a prior attempt
+            await page.keyboard.press("Control+A"); await page.keyboard.press("Backspace")
+        except Exception:
+            pass
+        await page.wait_for_timeout(450)
+    except Exception:
+        return ""
+    for osel in (".select__option", "[class*='select__option']",
+                 "[role='option']", "li[role='option']"):
+        try:
+            opt = page.locator(osel).filter(has_text=str(target)).first
+            if await opt.count() and await opt.is_visible():
+                await opt.click(timeout=2000)
+                await page.wait_for_timeout(500)
+                break
+        except Exception:
+            continue
+    # Verify via the control's single-value, scoped to THIS field's control.
+    # (Must use .select__control / .select-shell — NOT a generic [class*=
+    # container], which matches the narrow .select__input-container that does
+    # not hold the selected value.)
+    try:
+        shown = await loc.evaluate(
+            "el => { const sh = el.closest('.select__control, .select-shell,"
+            " .select__value-container') || document;"
+            " const sv = sh.querySelector('[class*=\"single-value\"]');"
+            " return sv ? sv.innerText.trim() : ''; }")
+        if shown:
+            return shown
+    except Exception:
+        pass
+    chip = await _selected_chip(page, idx)
+    if chip:
+        return chip
+    if await _field_shows_value(page, idx):
+        return await _field_display_text(page, idx) or str(target)
+    return ""
+
 
 def _term_of(target):
     """The most discriminating word to type for a typeahead search."""
@@ -1112,57 +1202,88 @@ async def _handle_select(page, e, val, idx_frame, elements, profile, user_id,
     # no typing/Enter dance. Route it straight there.
     if e.get("tag") == "select":
         tgt = _cache_get(profile, label, val) or val or ""
-        ok, _ = await execute_action(page, {"action": "select", "index": idx,
-                 "value": tgt, "label": label}, idx_frame, elements, "", creds)
-        if ok or await _field_shows_value(page, idx):
-            _cache_set(profile, user_id, label, val, tgt)
-            return "filled", f"[{idx}] {label}={str(tgt)[:30]} [native]"
+        if tgt:
+            ok, _ = await execute_action(page, {"action": "select", "index": idx,
+                     "value": tgt, "label": label}, idx_frame, elements, "", creds)
+            if ok or await _field_shows_value(page, idx):
+                _cache_set(profile, user_id, label, val, tgt)
+                return "filled", f"[{idx}] {label}={str(tgt)[:30]} [native]"
+        # No/failed target → read the <option> list straight from the DOM (never
+        # click: opening a native <select> shows an OS popup that freezes the
+        # page) and resolve via cache/strong-match/LLM/auto-answer/hold.
+        opts = []
+        try:
+            raw = await page.locator(f'[data-agent-idx="{idx}"] option').all_inner_texts()
+            opts = [o.strip() for o in raw
+                    if o.strip() and not o.strip().lower().startswith(
+                        ("please select", "select one", "select an option", "choose", "--"))]
+        except Exception:
+            pass
+        if opts:
+            res = await _resolve_choice_core(idx, label, val, opts, profile, user_id,
+                                             gemini_client, held_list)
+            if res.held or not res.value:
+                return "held", f"[{idx}] {label} [HELD: confirm dropdown]"
+            ok, _ = await execute_action(page, {"action": "select", "index": idx,
+                     "value": res.value, "label": label}, idx_frame, elements, "", creds)
+            if ok or await _field_shows_value(page, idx):
+                _cache_set(profile, user_id, label, val, res.value)
+                return "filled", f"[{idx}] {label}={str(res.value)[:30]} [native+{res.source}]"
         return "fail", f"[{idx}] {label}={tgt!r} [native select failed]"
 
-    # Selection = ONE distilled type->Enter->verify attempt per target (fast,
-    # ~2.5s, self-verified). Workday's long typeaheads do NOT filter visually —
-    # Enter snaps to the match — so we type the discriminating word and Enter.
-    # Targets to try, best first: cached option, then the deterministic value.
-    cached = _cache_get(profile, label, val)
-    for target, src in [(cached, "cached"), (val, "direct")]:
-        if not target:
-            continue
-        shown = await _select_once(page, idx, _term_of(target))
-        if shown and _related(target, shown):
-            _cache_set(profile, user_id, label, val, shown)
-            return "filled", f"[{idx}] {label}={shown[:30]} [{src}]"
-        if cached and target == cached and shown and _related(val, shown):
-            # cache term snapped to something matching the profile value — fine.
-            return "filled", f"[{idx}] {label}={shown[:30]} [cached]"
+    # ── Universal dropdown strategy ──────────────────────────────────────
+    # 1. Scrape options (open → read → close). Safe for ALL dropdown types.
+    # 2. Resolve which option to pick (cache → strong match → LLM).
+    # 3. Commit by CLICKING the option (safe, works everywhere).
+    # 4. Fall back to typing only if clicking didn't work (long typeaheads).
+    #
+    # The old approach typed first, which corrupts any dropdown that filters
+    # on keystrokes (react-select, custom selects, etc.) — "No options" kills
+    # all subsequent attempts.
 
-    # Neither cache nor the raw value snapped correctly -> this is a SEMANTIC
-    # mismatch (e.g. MTech vs 'Master's') or a virtualized list. Scrape the
-    # options and resolve via the core (cache/strong/LLM/decline/hold), then do
-    # ONE select for the resolved option.
     opts = await _scrape_options(page, idx, type_hint=val)
-    if not opts:
-        # Last resort: the proven base.py ladder (handles native <select> and
-        # tenants where our distilled attempt didn't take).
-        ok, _ = await execute_action(page, {"action": "select", "index": idx,
-                 "value": val or "", "label": label}, idx_frame, elements, "", creds)
-        chip = await _selected_chip(page, idx)
-        if ok or chip or await _field_shows_value(page, idx):
-            return "filled", f"[{idx}] {label}={(chip or val)[:30]} [exec]"
-        return "nodata", f"[{idx}] {label}: no options scraped"
-    res = await _resolve_choice_core(idx, label, val, opts, profile, user_id,
-                                     gemini_client, held_list)
-    if res.held or not res.value:
-        return "held", f"[{idx}] {label} [HELD: confirm dropdown]"
-    shown = await _select_once(page, idx, _term_of(res.value))
-    if shown and _related(res.value, shown):
-        return "filled", f"[{idx}] {label}={shown[:30]} [{res.source}]"
-    # final fallback: base.py ladder once
-    ok, _ = await execute_action(page, {"action": "select", "index": idx,
-             "value": res.value, "label": label}, idx_frame, elements, "", creds)
+    cached = _cache_get(profile, label, val)
+
+    if opts:
+        res = await _resolve_choice_core(idx, label, val, opts, profile, user_id,
+                                         gemini_client, held_list)
+        if res.held or not res.value:
+            return "held", f"[{idx}] {label} [HELD: confirm dropdown]"
+        target = res.value
+        src = res.source
+    elif cached:
+        target, src = cached, "cached"
+    elif val:
+        target, src = val, "direct"
+    else:
+        return "nodata", f"[{idx}] {label}: no options and no profile value"
+
+    # Attempt 1: click the option (safe — doesn't corrupt the dropdown).
+    shown = await _open_and_click_option(page, idx, target)
+    if shown and _related(target, shown):
+        _cache_set(profile, user_id, label, val, shown)
+        return "filled", f"[{idx}] {label}={shown[:30]} [{src}+click]"
+
+    # Attempt 2: typeahead — type + Enter (for Workday-style long lists where
+    # Enter snaps to the match without filtering).
+    shown = await _select_once(page, idx, _term_of(target))
+    if shown and _related(target, shown):
+        _cache_set(profile, user_id, label, val, shown)
+        return "filled", f"[{idx}] {label}={shown[:30]} [{src}]"
+
+    # Attempt 3: base.py ladder (handles edge cases we haven't covered).
+    await execute_action(page, {"action": "select", "index": idx,
+             "value": target, "label": label}, idx_frame, elements, "", creds)
     chip = await _selected_chip(page, idx)
-    return (("filled", f"[{idx}] {label}={(chip or res.value)[:30]} [{res.source}+exec]")
-            if (ok or chip or await _field_shows_value(page, idx))
-            else ("fail", f"[{idx}] {label}={res.value!r} (not committed)"))
+    if chip and target and not _related(target, chip):
+        try:
+            await _remove_chip(page, idx)
+        except Exception:
+            pass
+        return "fail", f"[{idx}] {label}: wrong option {chip[:24]!r} (wanted {str(target)[:24]!r})"
+    committed = bool(chip) or await _field_shows_value(page, idx)
+    return (("filled", f"[{idx}] {label}={(chip or target)[:30]} [{src}+exec]")
+            if committed else ("fail", f"[{idx}] {label}={target!r} (did not commit)"))
 
 
 async def _fill_one(page, e, idx_frame, elements, profile, user_id, creds,
@@ -1182,6 +1303,19 @@ async def _fill_one(page, e, idx_frame, elements, profile, user_id, creds,
     if itype == "skip":
         return "skip", ""
 
+    # Career-site chat widgets (Phenom "Career Bot" etc.) get collected like
+    # form fields — never type into them: auto-draft once MESSAGED a recruiter
+    # chatbot instead of applying.
+    _ll = (label or "").lower()
+    if "chatbot" in _ll or "chat bot" in _ll or "career bot" in _ll or \
+       ("chat" in _ll and ("input" in _ll or "message" in _ll or "send" in _ll)):
+        return "skip", f"[{idx}] {label[:40]} (chat widget)"
+    # Site search boxes are never application fields (live test typed the
+    # candidate's name into a careers-site search bar).
+    if _ll.strip() in ("search", "search jobs", "search job", "keyword", "keywords",
+                       "search by keyword", "job search"):
+        return "skip", f"[{idx}] {label[:40]} (site search)"
+
     # ---- password / verify-password (from .env, BEFORE filled-guard since the
     #      field may already show masked dots) ----
     if _is_password_field(e):
@@ -1195,18 +1329,14 @@ async def _fill_one(page, e, idx_frame, elements, profile, user_id, creds,
             and _memo_key(e, itype) in fill_memo):
         return "skip", ""
 
-    # Already-filled guard (placeholder dates / "Select One" count as empty).
-    ok_to_skip = (not force and e.get("value")
-                  and not _is_placeholder_value(e.get("value"))
-                  and itype not in ("current_checkbox", "date", "consent", "radio"))
-    # A TYPEAHEAD dropdown can hold a previously mis-picked value (e.g. leftover
-    # 'Afghanistan (+93)' when the profile says India), so let it re-resolve —
-    # the per-run memo prevents re-opening a CORRECT one, and _handle_select's
-    # value-aware pre-check skips a chip that matches the profile value. Native
-    # <select> values are reliable, so those still skip when already filled.
-    if itype == "select" and e.get("widget") == "typeahead":
-        ok_to_skip = False
-    if ok_to_skip:
+    # Already-filled guard: if a field shows a real (non-placeholder) value,
+    # trust it and move on. The vision audit catches genuinely wrong values
+    # (e.g. wrong country) — string-comparing the profile value against the
+    # displayed option is unreliable (profile "5 years 7 months" vs option
+    # "3-8", profile "India" vs display "+91").
+    if (not force and e.get("value")
+            and not _is_placeholder_value(e.get("value"))
+            and itype not in ("current_checkbox", "consent")):
         return "skip", ""
 
     # ---- upload ----
@@ -1364,6 +1494,12 @@ async def _fill_one(page, e, idx_frame, elements, profile, user_id, creds,
 async def _fill_pass(page, profile, user_id, creds, resume_path, upload_state,
                      gemini_client, held_list, fill_memo=None):
     elements, idx_frame = await collect_elements(page)
+    if len(elements) < 3:
+        # React boards (Glean's Greenhouse) hydrate the form AFTER load — an
+        # early observe sees a near-empty page and converge spirals into
+        # vision recovery. Wait once and re-observe before believing it.
+        await page.wait_for_timeout(2500)
+        elements, idx_frame = await collect_elements(page)
     _assign_section_rows(elements)   # number un-numbered repeated rows (HPE, etc.)
     buckets = {"filled": [], "nodata": [], "fail": [], "held": []}
     handled_groups = set()    # radio groups answered once per pass
@@ -1491,6 +1627,16 @@ def _print_held_summary(held_list, user_id):
 
 
 # ── main convergence loop ────────────────────────────────────────────────────
+def _site_domain(url: str) -> str:
+    """Registrable domain (last two host labels) — for the converge origin
+    guard. 'job-boards.greenhouse.io' → 'greenhouse.io'."""
+    try:
+        host = urlparse(url).netloc.lower().split(":")[0]
+        return ".".join(host.split(".")[-2:]) if host else ""
+    except Exception:
+        return ""
+
+
 async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=None,
                         max_attempts=6, creds=None, on_notify=None, on_screenshot=None):
     """Fill the current page and advance. Returns a result dict (incl. final `page`).
@@ -1531,9 +1677,29 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
 
     prev_sig = None
     grounded_tried = False   # on-demand HTML+vision repair: at most once per page
+    home_dom = _site_domain(page.url)
+
     for attempt in range(1, max_attempts + 1):
         print(f"\n--- attempt {attempt} ---")
         held_list.clear()
+
+        if attempt > 1:  # a leftover popup can only exist after a prior attempt
+            try:  # dismiss any stray native <select> popup left by a mis-click —
+                await page.keyboard.press("Escape")  # it eats every click until closed
+            except Exception:
+                pass
+
+        # Origin guard: a mis-click on an in-form link (privacy policy,
+        # arbitration agreement…) can navigate AWAY from the application —
+        # live test wandered from Greenhouse onto glean.com's marketing site.
+        # If the domain changed, go back to the form before doing anything.
+        if home_dom and _site_domain(page.url) != home_dom:
+            print(f"  wandered off-application → {page.url[:70]} — going back")
+            try:
+                await page.go_back(wait_until="domcontentloaded", timeout=8000)
+                await settle(page)
+            except Exception:
+                pass
 
         # 0a) clear cookie/consent banners + stuck modal backdrops that swallow
         #     clicks. Generic + deterministic; handles banners that reappear on
@@ -1566,6 +1732,12 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
         if on_notify:
             for n in b["filled"]:
                 try: await on_notify(f"✓ {n}")
+                except Exception: pass
+            # RC4: surface fields we could NOT fill (no profile data / failed) so
+            # the run isn't silently "thinking" while required fields sit empty.
+            # nodata/fail were previously console-only.
+            for n in (b["nodata"] + b["fail"])[:6]:
+                try: await on_notify(f"⚠ couldn't fill {n}")
                 except Exception: pass
         await _live(f"a{attempt}")
 
@@ -1680,10 +1852,25 @@ async def gateway_advance(page, ctx, gemini_client=None, *, on_notify=None, max_
         if ptype != "gateway" or adv.get("index") is None:
             return page
         before = page.url
+        # Set-of-marks vision sometimes returns the right LABEL with the wrong
+        # NUMBER (live test: claimed 'Apply Now', index pointed at the 'Teams'
+        # nav link). If the indexed element's own label disagrees with the
+        # claimed label, re-resolve the index by label.
+        adv_idx = adv.get("index")
+        claimed = (adv.get("label") or "").strip().lower()
+        by_idx  = next((el for el in elems if el.get("idx") == adv_idx), None)
+        actual  = ((by_idx or {}).get("label") or "").strip().lower()
+        if claimed and actual and claimed not in actual and actual not in claimed:
+            match = next((el for el in elems
+                          if claimed in ((el.get("label") or "").strip().lower())), None)
+            if match:
+                print(f"  gateway: index {adv_idx} is {actual!r} — re-resolved to "
+                      f"[{match.get('idx')}] by label {claimed!r}")
+                adv_idx = match.get("idx")
         if on_notify:
             await on_notify(f"🚪 Gateway page — clicking '{adv.get('label', 'Apply')}'")
         try:
-            await execute_action(page, {"action": "click", "index": adv["index"],
+            await execute_action(page, {"action": "click", "index": adv_idx,
                                         "label": adv.get("label", "")},
                                  idx_fr, elems, "", creds)
         except Exception:
@@ -1693,6 +1880,18 @@ async def gateway_advance(page, ctx, gemini_client=None, *, on_notify=None, max_
         if np is not page:
             page = np
         await settle(page)
+        # Gateway clicked a legal/policy link instead of Apply (vision mis-pick)
+        # — undo immediately; these pages are never the application.
+        u = page.url.lower()
+        if page.url != before and any(k in u for k in
+                ("arbitration", "privacy", "terms", "cookie", "policy")):
+            print(f"  gateway landed on legal page {page.url[:60]} — going back")
+            try:
+                await page.go_back(wait_until="domcontentloaded", timeout=8000)
+                await settle(page)
+            except Exception:
+                pass
+            continue
         if page.url == before and np is page:
             return page   # nothing moved — stop
     return page

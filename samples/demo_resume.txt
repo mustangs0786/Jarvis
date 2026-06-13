@@ -1,0 +1,70 @@
+DEEPAK KUMAR
+mustangs0786@gmail.com  |  linkedin.com/in/deepak-kumar-55a927414
+SUMMARY
+Results-driven Data Scientist with 5+ years of experience designing scalable machine learning models, optimizing network
+performance, and analyzing large-scale telemetry data. Proven expertise in time-series forecasting, predictive modeling, and
+big data processing using Python and Azure Databricks. Adept at translating complex network and IoT telemetry into
+actionable insights to drive coverage forecasting and infrastructure optimization.
+EXPERIENCE
+Microsoft
+AI/ML Applied Scientist   Dec 2022 – Present
+• Built an enterprise Copilot evaluation framework on Azure ML that automated quality benchmarking across 12 product
+teams, cutting manual review cycles by 70% and improving response relevance scores by 18% through reinforcement
+learning from human feedback (RLHF).
+• Led end-to-end development of a multi-agent orchestration system using AutoGen and Azure AI Foundry, enabling
+autonomous task decomposition across 5 enterprise workflows and reducing analyst toil by 40% — deployed to 3,000+
+internal users within 6 months.
+• Designed a responsible-AI content moderation pipeline integrating Azure Content Safety with a custom fine-tuned Mistral-7B
+classifier, achieving 97.3% precision on harmful content detection and reducing false-positive escalations by 55% across
+global markets.
+• Optimized distributed model training on Azure Databricks with DeepSpeed ZeRO-3, cutting GPU-hour costs by 35% on
+70B-parameter workloads and reducing time-to-deploy for production LLM checkpoints from 5 days to under 18 hours.
+Tiger Analytics
+Data Scientist   Jun 2022 – Dec 2022
+• Built a Bayesian Market-Mix Model using Python, successfully reallocating a 5M EUR budget and increasing marketing ROI
+by 10% for MARS Petcare Germany.
+• Delivered executive dashboards to guide FY23 investment decisions, partnering with global cross-functional stakeholders to
+translate complex data insights into actionable strategies.
+Verizon
+Data Scientist   Aug 2020 – Jun 2022
+• Forecasted power usage and telemetry metrics across 100K cell towers using a Prophet and ARIMA ensemble, informing a
+USD 800M OPEX budget and improving coverage forecasting accuracy by 18% on hybrid cloud infrastructure.
+• Optimized fiber-rollout milestones and network performance by deploying regression models, improving on-time delivery by
+25% and reducing manual scheduling effort by 4× across regional engineering teams.
+SKILLS
+Data & AI Engineering: Python, SQL, MySQL, PostgreSQL, Azure Databricks, PySpark, REST APIs, Data Pipelines, Hybrid
+Cloud, IoT Telemetry
+Machine Learning & MLOps: MLflow, Docker, CI/CD (GitHub Actions), MLOps Pipeline Automation, Production ML
+Deployment, XGBoost, Random Forest, Network Performance Optimization
+GenAI & NLP: Agentic AI, Workflow Automation, Llama-3, Phi-3, Mistral, GPT-4, RAG, LangChain, Vector DB
+(FAISS/Pinecone), Hugging Face
+Time-Series & Analytics: Prophet, ARIMA, Fraud Prevention, Root Cause Analysis, Agile, Mesh Networks, BLE, LoRa
+PROJECTS
+Local LLM Chat Application — Designed and deployed a privacy-first AI assistant running entirely on-device using quantized
+Llama-2-7B and Mistral-7B via llama.cpp, achieving sub-2s response latency on CPU-only hardware with zero cloud
+
+dependency. Built a multi-session Streamlit UI with conversation history, model switching, and token-budget controls; reduced
+inference memory footprint by 60% through 4-bit GGUF quantization.
+Real-Time Ad-Detection CV Pipeline (US Patent 12126855B2) — Architected and patented a production-grade
+streaming-commerce engine that identifies branded products in live video frames at 30 FPS using YOLOv5 for object detection
+and CRAFT for text localization. Pipeline achieved 91% mAP on a proprietary 50K-frame benchmark, reduced manual
+product-tagging effort by 80%, and enabled real-time shoppable overlays for 3 major OTT platforms — generating an estimated
+USD 4M in incremental affiliate revenue.
+AutoML Image Classifier — Built a no-code AutoML platform with a Streamlit GUI that lets domain experts label images,
+trigger fine-tuning of a ResNet-50 backbone via PyTorch Lightning, and deploy the model as a REST endpoint — all within a
+single browser session. Achieved 90%+ top-1 accuracy across 5 production use-cases; cut model iteration cycles from 2 weeks
+to under 4 hours and eliminated the need for dedicated ML engineers on 3 client teams.
+Time-Series Forecasting Application — Developed an ensemble forecasting platform in Python and Streamlit that blends
+Prophet, ARIMA, and XGBoost predictions using a stacking meta-learner, reducing MAPE by 22% versus any single model.
+Deployed for network-capacity planning across 50K+ cell-tower sites; interactive dashboards let planners drill into coverage
+gaps, run what-if scenarios, and export board-ready business plans — directly informing a USD 800M OPEX allocation.
+EDUCATION
+IIT Hyderabad
+MTech in Data Science   Aug 2025 – May 2027
+Chandigarh Engineering College
+B.Tech, Computer Science   Aug 2016 – May 2020
+ACHIEVEMENTS
+• US Patent 12126855B2: Streaming Commerce real-time ad-detection engine – USPTO (2024)
+• Global Make It Happen 2024 Award, Top 200 of 400K+ employees (2024)
+• Winner, Provider Ops Data-Science Hackathon (2024)
+• 3× Spot Awards for data-science impact – Verizon (2022)

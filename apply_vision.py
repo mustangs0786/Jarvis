@@ -142,9 +142,13 @@ async def correct_from_audit(page, profile, audit, *, on_notify=None):
         # value into the wrong field (this was the name-in-salary corruption).
         el_lab, fl = _norm_lbl(e.get("label")), _norm_lbl(field_label)
         if fl and el_lab and not (el_lab == fl or el_lab in fl or fl in el_lab):
-            if on_notify:
-                await on_notify(f"⏭️ Vision skip: [{idx}] is '{e.get('label','')[:24]}', "
-                                f"not '{field_label[:24]}' (index drift)")
+            print(f"  vision skip: [{idx}] is '{e.get('label','')[:24]}', "
+                  f"not '{field_label[:24]}' (index drift)")
+            continue
+        cur = _norm(e.get("value"))
+        want = _norm(value)
+        if cur and want and (cur == want or want in cur or cur in want):
+            print(f"  vision skip: [{idx}] {field_label[:30]} already shows correct value")
             continue
         is_choice = (e.get("tag") == "select" or e.get("widget") in ("select", "typeahead")
                      or bool(e.get("options")))
@@ -195,6 +199,38 @@ async def vision_recover(page, profile, errors, gemini_client=None, *, on_notify
     creds = _creds()
     err_text = "\n".join(f"- {e}" for e in (errors or [])[:8]) or "(page did not advance; no explicit error text)"
     taken = 0
+
+    # RC3: error-FIRST. The site already flags exactly which fields are wrong
+    # (red outline + "X is required"). Fill those by their own index straight
+    # from the profile — deterministic, no vision guess — before falling back
+    # to the LLM (which otherwise fixates on a salient widget like a Country
+    # dropdown instead of the actually-empty required fields).
+    from apply_engine import scan_page_errors, resolve_field_value
+    from auto_agent import collect_elements
+    try:
+        elems0, idxf0 = await collect_elements(page)
+        errs0 = await scan_page_errors(page)
+        err_idxs = {e.get("idx") for e in errs0 if e.get("idx") is not None}
+        for e in elems0:
+            if e.get("idx") in err_idxs:
+                val = resolve_field_value(e, profile)
+                if not val:
+                    continue
+                try:
+                    ok, _n = await execute_action(page, {"action": "fill", "index": e.get("idx"),
+                                "value": val, "label": e.get("label", "")}, idxf0, elems0, "", creds)
+                    if ok:
+                        taken += 1
+                        if on_notify:
+                            await on_notify(f"🎯 Fixed errored field: {e.get('label','')[:40]}")
+                        await settle(page)
+                except Exception:
+                    pass
+        if taken:
+            return taken   # errored fields handled deterministically; skip the guess
+    except Exception:
+        pass
+
     for _ in range(max_tries):
         elems, idx_fr, marked = await _full_marked_shot(page)
         out = llm_json(_RECOVER_PROMPT.format(pctx=_profile_ctx(profile), errors=err_text,

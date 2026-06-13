@@ -17,7 +17,9 @@ api_key = os.getenv("GEMINI_API_KEY")
 if not api_key:
     raise ValueError("GEMINI_API_KEY not found. Please set it in your .env file.")
 
-client = genai.Client(api_key=api_key)
+# 90s HTTP timeout — Gemini occasionally stalls for minutes; better to fail
+# fast and fall back than hang the caller indefinitely.
+client = genai.Client(api_key=api_key, http_options={"timeout": 90_000})
 MODEL = "gemini-3.5-flash"
 
 MIME_MAP = {

@@ -7,7 +7,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-APP_DIR="$HOME/Resume_Builder"
+APP_DIR="$HOME/Jarvis"
 
 echo "==> System packages (Xvfb gives headful Chromium a virtual display; Caddy = HTTPS)"
 sudo apt-get update

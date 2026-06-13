@@ -302,21 +302,22 @@ def get_field_value(label: str, profile: dict, section_label: str | None = None)
     #    "linkedin profile" beats "linkedin" when both could apply.
     label_tokens = _field_tokens(label)
     if label_tokens:
-        best = None  # (specificity, profile_key)
+        # Collect ALL matching mapping keys, try most-specific first, return the
+        # first whose profile value is NON-EMPTY. (Previously it kept only the
+        # single most-specific key and gave up if its value was empty — so
+        # "Location (City)" chose `location` (empty) and returned None instead
+        # of falling through to `city`='Bengaluru'.)
+        cands = []  # (specificity, profile_key)
         for mk, pk in FIELD_MAP.items():
             mk_tokens = _field_tokens(mk)
-            if not mk_tokens:
-                continue
-            if mk_tokens.issubset(label_tokens):
-                # Score: token-count first, then mapping-key string length
-                # (tie-breaker — longer key is more discriminating, so
-                # "college" beats "name" for "College Name*").
-                spec = (len(mk_tokens), len(mk))
-                if best is None or spec > best[0]:
-                    best = (spec, pk)
-        if best:
-            val = profile.get(best[1], "")
-            if val: return str(val)
+            if mk_tokens and mk_tokens.issubset(label_tokens):
+                # token-count first, then key length (longer = more specific:
+                # "college name" beats "name" for "College Name*").
+                cands.append(((len(mk_tokens), len(mk)), pk))
+        for _spec, pk in sorted(cands, key=lambda c: c[0], reverse=True):
+            val = profile.get(pk, "")
+            if val:
+                return str(val)
     # 3) Screening dict — same whole-token subset rule (was bidirectional
     #    substring which leaked across unrelated questions).
     if label_tokens:

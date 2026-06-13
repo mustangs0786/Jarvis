@@ -16,9 +16,17 @@ import os
 import json
 import uuid
 import queue
+import logging
 import sqlite3
 import asyncio
 import subprocess
+
+# Engine modules (linkedin_easy_apply, apply_engine, …) log progress and errors
+# via logging — without a root handler those lines vanish and failures are
+# silent in the terminal. uvicorn only configures its own loggers.
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 from pathlib import Path
 from datetime import datetime, date, timedelta
 from typing import AsyncGenerator
@@ -134,7 +142,8 @@ def call_llm(prompt: str, model: str = "gemini-3.5-flash") -> dict:
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"),
+                          http_options={"timeout": 120_000})
     for attempt in range(3):
         try:
             resp = client.models.generate_content(
@@ -145,8 +154,14 @@ def call_llm(prompt: str, model: str = "gemini-3.5-flash") -> dict:
             raw = resp.text.strip().replace("```json","").replace("```","").strip()
             return json.loads(raw)
         except Exception as e:
-            if attempt < 2: time.sleep(3 * (attempt + 1))
-            else: raise
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))
+            else:
+                # Gemini exhausted (e.g. free-tier daily quota 429) — fall back
+                # to Azure GPT via the apply_llm router so tailoring still works.
+                logging.warning(f"[llm] Gemini failed ({e}) — falling back to Azure GPT")
+                from apply_llm import _openai_json
+                return _openai_json(prompt)
 
 
 # ── Demo résumé (the base the agent tailors per job) ──────────────────────────
@@ -160,15 +175,39 @@ _DEMO_BASE_TEXT: str | None = None
 
 
 def _demo_base_text() -> str:
-    """Parse the bundled demo résumé once → plain text (cached)."""
+    """Parse the bundled demo résumé once → plain text.
+    Cached in memory AND on disk (demo_resume.txt next to the PDF) so a server
+    restart never re-pays the Gemini File API parse — that call took 5 minutes
+    on a slow day and used to run with no timeout. Falls back to local PyMuPDF
+    extraction if Gemini fails, so this never blocks the apply flow."""
     global _DEMO_BASE_TEXT
     if _DEMO_BASE_TEXT is None:
         _DEMO_BASE_TEXT = ""
         if DEMO_RESUME and Path(DEMO_RESUME).exists():
-            try:
-                _DEMO_BASE_TEXT = parse_resume_with_gemini(DEMO_RESUME) or ""
-            except Exception:
-                pass
+            cache = Path(DEMO_RESUME).with_suffix(".txt")
+            if cache.exists():
+                try:
+                    _DEMO_BASE_TEXT = cache.read_text(encoding="utf-8").strip()
+                except Exception:
+                    _DEMO_BASE_TEXT = ""
+            if not _DEMO_BASE_TEXT:
+                try:
+                    _DEMO_BASE_TEXT = parse_resume_with_gemini(DEMO_RESUME) or ""
+                except Exception as e:
+                    logging.warning(f"[tailor] Gemini resume parse failed: {e}")
+                if not _DEMO_BASE_TEXT or _DEMO_BASE_TEXT.startswith("Error:"):
+                    try:  # local extraction — instant, good enough to tailor from
+                        import fitz
+                        doc = fitz.open(DEMO_RESUME)
+                        _DEMO_BASE_TEXT = "\n".join(p.get_text() for p in doc).strip()
+                        doc.close()
+                    except Exception:
+                        _DEMO_BASE_TEXT = ""
+                if _DEMO_BASE_TEXT:
+                    try:
+                        cache.write_text(_DEMO_BASE_TEXT, encoding="utf-8")
+                    except Exception:
+                        pass
     return _DEMO_BASE_TEXT
 
 
@@ -310,7 +349,7 @@ _DEMO_HTML = """<!doctype html>
   *{box-sizing:border-box}
   body{margin:0;font:16px/1.55 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
     background:radial-gradient(1200px 600px at 80% -10%,#1b2540,transparent),var(--bg);color:var(--ink)}
-  .wrap{max-width:1040px;margin:0 auto;padding:40px 22px 60px}
+  .wrap{max-width:1320px;margin:0 auto;padding:40px 22px 60px}
   .badge{display:inline-block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--acc2);
     border:1px solid var(--line);border-radius:999px;padding:5px 12px;background:#0e1730}
   h1{font-size:34px;margin:16px 0 6px;letter-spacing:-.02em}
@@ -333,14 +372,17 @@ _DEMO_HTML = """<!doctype html>
   .li.ok .lidot{background:var(--acc2)}
   .li button{background:#0e1730;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12.5px;cursor:pointer}
   .li button:hover{border-color:var(--acc)} .li.ok button{display:none}
-  .live{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  @media(max-width:760px){.live{grid-template-columns:1fr}}
+  .live{display:grid;grid-template-columns:minmax(300px,2fr) 3fr;gap:16px;align-items:start}
+  .live.theater{grid-template-columns:minmax(220px,1fr) 4fr}
+  @media(max-width:900px){.live,.live.theater{grid-template-columns:1fr}}
   .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;min-height:130px}
   .panel h4{margin:0 0 10px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--mut)}
-  #log{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:440px;overflow:auto}
+  #log{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:600px;overflow:auto}
   #log .l{padding:3px 0;border-bottom:1px solid #1b2540;white-space:pre-wrap;word-break:break-word}
   #log .info{color:var(--ink)} #log .sys{color:var(--mut)} #log .err{color:var(--err)} #log .ok{color:var(--acc2)}
   #shotWrap{display:none} #shot{width:100%;border-radius:10px;border:1px solid var(--line);display:block}
+  #liveBadge{display:none;color:#2ecc71;font-weight:600;font-size:12px;margin-left:8px;animation:pulse 1.5s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .empty{color:var(--mut);font-size:14px}
   #result{display:none;margin:16px 0 0;border-radius:14px;padding:16px 18px}
   #result.ok{background:#0f2a1f;border:1px solid #1f5a3a} #result.bad{background:#2a1014;border:1px solid #5a1f25}
@@ -364,6 +406,24 @@ _DEMO_HTML = """<!doctype html>
   #ask .row{display:flex;gap:8px}
   #ask input{flex:1;background:#0e1730;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:10px 12px;outline:none}
   #ask button{background:var(--acc);color:#04122e;font-weight:700;border:0;border-radius:10px;padding:0 18px;cursor:pointer}
+  .auto-row{margin:-10px 0 16px;font-size:13.5px;color:var(--mut);display:flex;align-items:center;gap:8px}
+  .auto-row input[type=checkbox]{appearance:none;-webkit-appearance:none;width:20px;height:20px;
+    border:2px solid var(--mut);border-radius:5px;background:#0e1730;cursor:pointer;
+    position:relative;vertical-align:middle;flex:none}
+  .auto-row input[type=checkbox]:checked{background:var(--acc2);border-color:var(--acc2)}
+  .auto-row input[type=checkbox]:checked::after{content:'';position:absolute;left:6px;top:2px;
+    width:5px;height:10px;border:solid #04122e;border-width:0 2px 2px 0;transform:rotate(45deg)}
+  .auto-row label{cursor:pointer} .auto-row b{color:var(--acc2)}
+  .steps{display:flex;gap:8px;margin:0 0 14px;flex-wrap:wrap}
+  .st{font-size:12.5px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:6px 12px;background:#0e1730}
+  .st.on{color:var(--ink);border-color:var(--acc)}
+  .st.done{color:var(--acc2);border-color:#1f5a3a}
+  .qr{display:flex;gap:8px;margin:0 0 10px;flex-wrap:wrap}
+  .qb{border:1px solid var(--line);background:#0e1730;color:var(--ink);border-radius:10px;padding:8px 14px;cursor:pointer;font-size:13.5px}
+  .qb:hover{border-color:var(--acc)}
+  .qb.ok{border-color:#1f5a3a;color:var(--acc2)} .qb.go{border-color:var(--acc);color:var(--acc)} .qb.no{border-color:#5a1f25;color:var(--err)}
+  #shot{cursor:zoom-in} #shot.zoom{position:fixed;left:2vw;top:2vh;width:96vw;height:96vh;object-fit:contain;z-index:99;background:#04060f;cursor:zoom-out}
+  #shotEmpty{min-height:420px;display:flex;align-items:center;justify-content:center}
   .foot{margin-top:26px;color:var(--mut);font-size:12.5px;display:flex;gap:16px;align-items:center}
   .foot a{color:var(--mut)}
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#f4c789;margin-right:6px}
@@ -385,18 +445,35 @@ _DEMO_HTML = """<!doctype html>
     <span class="chip" onclick="fill(this)" data-u="https://expedia.wd108.myworkdayjobs.com/search"><b>Workday</b> · sample</span>
   </div>
 
+  <div class="auto-row"><input type="checkbox" id="auto" checked>
+    <label for="auto">🤖 <b>Autopilot</b> — the agent only asks if it's stuck, and submits automatically</label></div>
+  <div class="auto-row"><input type="checkbox" id="tailorToggle">
+    <label for="tailorToggle">✍️ <b>Tailor résumé</b> — rewrite the résumé for this role first (off = apply directly with base résumé, faster)</label></div>
+
   <div class="li" id="li"><span class="lidot"></span><span id="liTxt">Checking LinkedIn…</span>
     <button id="liBtn" onclick="liConnect()">Connect LinkedIn</button></div>
 
   <div id="tailor"></div>
   <div id="result"></div>
-  <div id="ask"><p class="q" id="askQ"></p><div class="row"><input id="ans" placeholder="Type an answer…"
-       onkeydown="if(event.key==='Enter')answer()"><button onclick="answer()">Send</button></div></div>
+  <div class="steps">
+    <span class="st" id="st1">1 · Tailor résumé</span>
+    <span class="st" id="st2">2 · Launch browser</span>
+    <span class="st" id="st3">3 · Fill application</span>
+    <span class="st" id="st4">4 · Submit</span>
+  </div>
 
-  <div class="live">
+  <div class="live" id="live">
     <div class="panel"><h4>Agent activity</h4><div id="log"><div class="empty">Paste a URL and hit Apply to begin.</div></div></div>
-    <div class="panel"><h4>Live view</h4><div id="shotWrap"><img id="shot" alt="agent screenshot"></div>
-      <div class="empty" id="shotEmpty">The browser screen will stream here.</div></div>
+    <div class="panel"><h4>Live view<span id="liveBadge">&#9679; LIVE</span></h4><div id="shotWrap"><img id="shot" alt="agent screenshot"></div>
+      <div class="empty" id="shotEmpty">The browser screen will stream here.</div>
+      <div id="ask"><p class="q" id="askQ"></p>
+        <div class="qr">
+          <button class="qb ok" id="qbOk" onclick="quick('ok')">&#10003; Continue</button>
+          <button class="qb go" id="qbGo" onclick="quick('submit')">&#128640; Submit now</button>
+          <button class="qb no" id="qbNo" onclick="quick('cancel')">&#10005; Cancel</button>
+        </div>
+        <div class="row"><input id="ans" placeholder="Or type an answer…"
+          onkeydown="if(event.key==='Enter')answer()"><button onclick="answer()">Send</button></div></div></div>
   </div>
 
   <div class="foot">
@@ -414,8 +491,13 @@ _DEMO_HTML = """<!doctype html>
     box.appendChild(d); box.scrollTop=box.scrollHeight;
   }
   function showShot(u){ if(!u) return; $('shotEmpty').style.display='none'; $('shotWrap').style.display='block';
-    $('shot').src = u + (u.indexOf('?')<0?('?t='+Date.now()):''); }
-  function stop(){ if(es){es.close();es=null;} $('go').disabled=false; $('go').textContent='Apply →'; }
+    $('liveBadge').style.display='inline'; $('live').classList.add('theater');
+    // Preload the next frame off-screen and swap only once it has decoded —
+    // assigning src directly blanks the <img> mid-load and causes the flicker.
+    var nu = u + (u.indexOf('?')<0?('?t='+Date.now()):''); var pre=new Image();
+    pre.onload=function(){ $('shot').src=nu; }; pre.src=nu; }
+  function stop(){ if(es){es.close();es=null;} $('go').disabled=false; $('go').textContent='Apply →';
+    $('live').classList.remove('theater'); }
   function start(){
     var url=$('url').value.trim(); if(!url){ $('url').focus(); return; }
     stop(); done=false;
@@ -424,7 +506,9 @@ _DEMO_HTML = """<!doctype html>
     $('log').innerHTML=''; $('shotWrap').style.display='none'; $('shotEmpty').style.display='block';
     sid='judge-'+Math.random().toString(36).slice(2,10);
     log('Starting agent on '+url,'sys');
-    es=new EventSource('/api/auto-apply?session_id='+encodeURIComponent(sid)+'&job_url='+encodeURIComponent(url));
+    setStage(1);
+    es=new EventSource('/api/auto-apply?session_id='+encodeURIComponent(sid)+'&job_url='+encodeURIComponent(url)
+       +'&autopilot='+($('auto').checked?1:0)+'&tailor='+($('tailorToggle').checked?1:0));
     es.onmessage=function(e){ var d; try{d=JSON.parse(e.data)}catch(_){return} handle(d); };
     es.onerror=function(){ if(!done) log('Stream closed.','sys'); stop(); };
   }
@@ -433,14 +517,39 @@ _DEMO_HTML = """<!doctype html>
     if(s==='shot'){ showShot(d.url); return; }
     if(s==='tailor'){ tailorCard(d); return; }
     if(s==='question'){ ask(d.msg, d.shot); return; }
-    if(s==='applied'){ done=true; result(d); stop(); return; }
+    if(s==='applied'){ done=true; if(d.status==='success') setStage(5); result(d); stop(); return; }
     if(s==='error'||s==='no_profile'||s==='apply_unavailable'){ done=true; log('⚠ '+(d.msg||'Error'),'err'); stop(); return; }
-    if(d.msg) log(d.msg, s==='applying'?'info':'sys');
+    if(d.msg){
+      log(d.msg, s==='applying'?'info':'sys');
+      if(/Launching browser/i.test(d.msg)) setStage(2);
+      if(/modal opened|Filling your details|Step \d+ filled/i.test(d.msg)) setStage(3);
+      if(/Review step/i.test(d.msg)) setStage(4);
+    }
   }
-  function ask(q,shot){ $('ask').style.display='block'; $('askQ').textContent=q||'The agent needs input:';
+  var okAns='ok', noAns='cancel';
+  function ask(q,shot){
+    q=String(q||'The agent needs input:').replace(/\*/g,'');
+    $('ask').style.display='block'; $('askQ').textContent=q;
+    var ql=q.toLowerCase();
+    var showOk=true, showGo=false, showNo=true;
+    okAns='ok'; noAns='cancel';
+    if(ql.indexOf('ready to submit')>-1||ql.indexOf('reply submit')>-1){      // final confirm
+      showOk=false; showGo=true;
+    } else if(ql.indexOf('retry')>-1){                                        // stuck on navigation
+      okAns='retry'; noAns='skip';
+      $('qbOk').innerHTML='&#8635; Retry'; $('qbNo').innerHTML='&#8618; Stop here';
+    } else if(ql.indexOf('step')>-1&&ql.indexOf('fix')>-1){                   // step review (supervised)
+      showNo=false; $('qbOk').innerHTML='&#10003; Continue';
+    } else {                                                                  // unknown field — type or skip
+      showOk=false; noAns='skip'; $('qbNo').innerHTML='&#8618; Skip this field';
+    }
+    $('qbOk').style.display=showOk?'':'none';
+    $('qbGo').style.display=showGo?'':'none';
+    $('qbNo').style.display=showNo?'':'none';
     showShot(shot); $('ans').value=''; $('ans').focus(); }
-  function answer(){
-    var a=$('ans').value.trim(); if(!a) return;
+  function quick(k){ sendAnswer(k==='ok'?okAns:(k==='cancel'?noAns:k)); }
+  function answer(){ var a=$('ans').value.trim(); if(!a) return; sendAnswer(a); }
+  function sendAnswer(a){
     fetch('/api/apply-answer',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session_id:sid,answer:a})});
     log('You: '+a,'ok'); $('ask').style.display='none';
@@ -460,7 +569,7 @@ _DEMO_HTML = """<!doctype html>
     var t=$('tailor'); t.style.display='block';
     if(d.no_jd){
       t.innerHTML='<h3>📄 Applying with base résumé</h3>'+
-        '<p class="job">The job description isn\\'t readable here (e.g. LinkedIn is behind a login), '+
+        '<p class="job">The job description isn\\'t readable here (the site blocks automated readers, e.g. login or anti-bot), '+
         'so the agent applies with your base résumé.</p>'+
         (d.original_url?'<div class="links"><a href="'+d.original_url+'" target="_blank">📄 Original résumé</a></div>':'');
       return;
@@ -499,6 +608,11 @@ _DEMO_HTML = """<!doctype html>
     };
     ls.onerror=function(){ ls.close(); $('liBtn').disabled=false; $('liBtn').textContent='Connect LinkedIn'; liStatus(); };
   }
+  function setStage(n){
+    for(var i=1;i<=4;i++){ var el=$('st'+i); if(!el) continue;
+      el.className='st'+(i<n?' done':(i===n?' on':'')); }
+  }
+  $('shot').onclick=function(){ this.classList.toggle('zoom'); };
   liStatus();
 </script>
 </body></html>"""
@@ -788,8 +902,38 @@ async def resume_update_stream(session_id: str, description: str):
 # them into the matching queue here for the worker's on_stuck to pick up.
 APPLY_ANSWERS: dict[str, queue.Queue] = {}
 
+def _friendly_error(msg: str) -> str:
+    """Map raw engine/SDK errors to judge-friendly one-liners."""
+    m = (msg or "").lower()
+    if "429" in m or "resource_exhausted" in m or "quota" in m or "rate limit" in m:
+        return "⚠️ LLM quota hit — the agent switched to the backup model. Just retry."
+    if "timeout" in m and ("goto" in m or "navigation" in m or "net::" in m):
+        return "⚠️ The job page took too long to load — check the URL and retry."
+    if "no linkedin session" in m:
+        return "🔐 LinkedIn not connected — click Connect LinkedIn above."
+    if "checkpoint" in m or "li_at" in m or ("linkedin" in m and ("session" in m or "expired" in m)):
+        return "🔐 LinkedIn session expired — click Connect LinkedIn and sign in once."
+    return msg
+
+
+def _normalize_url(u: str) -> str:
+    """Make a pasted job URL navigable. Adds a scheme if missing (people paste
+    'greenhouse.io/...' or 'www.company.com/jobs/1'), and fixes the common
+    'ww.' typo for 'www.'. Both the Selenium scraper and Playwright reject a
+    schemeless URL with 'invalid argument' / 'invalid URL'."""
+    u = (u or "").strip().strip('"').strip("'")
+    if not u:
+        return u
+    if u.startswith(("http://", "https://")):
+        return u
+    if u.startswith("ww.") or u.startswith("ww2."):
+        u = "www." + u.split(".", 1)[1]
+    return "https://" + u.lstrip("/")
+
+
 @app.get("/api/auto-apply")
-async def auto_apply_stream(job_url: str, session_id: str = ""):
+async def auto_apply_stream(job_url: str, session_id: str = "", autopilot: int = 1, tailor: int = 0):
+    job_url = _normalize_url(job_url)
 
     async def generate() -> AsyncGenerator[dict, None]:
         # A session is OPTIONAL — judges can apply by pasting only a job URL. The agent
@@ -821,14 +965,31 @@ async def auto_apply_stream(job_url: str, session_id: str = ""):
         # the demo base and tailor it to THIS job, streaming the analysis + changes so
         # the (otherwise invisible) tailoring step is visible in the demo. ──
         ui_pdf = result_data.get("pdf_path", "")
-        if ui_pdf and Path(ui_pdf).exists():
-            resume_path = ui_pdf
-        else:
+        if not tailor:
+            # DEFAULT (toggle OFF): apply directly with the BASE résumé — no
+            # Gemini tailoring. Faster, and what most runs want.
             if not DEMO_RESUME or not Path(DEMO_RESUME).exists():
                 yield {"data": json.dumps({"step": "error",
                     "msg": "Demo résumé missing — add samples/demo_resume.pdf."})}
                 return
-            base_text = session.get("resume_text") or _demo_base_text()
+            resume_path = DEMO_RESUME
+            yield {"data": json.dumps({"step": "tailor", "tailored": False,
+                "no_jd": False, "original_url": "/demo-resume"})}
+            yield {"data": json.dumps({"step": "applying",
+                "msg": "📄 Tailoring off — applying directly with your base résumé."})}
+        elif ui_pdf and Path(ui_pdf).exists():
+            # toggle ON and a UI-tailored PDF already exists → use it (tailored only)
+            resume_path = ui_pdf
+        else:
+            # toggle ON, no prebuilt PDF → tailor the base résumé to THIS job now
+            if not DEMO_RESUME or not Path(DEMO_RESUME).exists():
+                yield {"data": json.dumps({"step": "error",
+                    "msg": "Demo résumé missing — add samples/demo_resume.pdf."})}
+                return
+            yield {"data": json.dumps({"step": "applying", "msg": "📄 Reading your base résumé…"})}
+            # to_thread: the Gemini File API parse can take minutes — running it
+            # inline froze the event loop (no SSE pings, dead UI) for that long.
+            base_text = session.get("resume_text") or await asyncio.to_thread(_demo_base_text)
 
             yield {"data": json.dumps({"step": "applying", "msg": "📄 Reading the job description…"})}
             analysis, jd = await asyncio.to_thread(_analyze_for_job, base_text, job_url)
@@ -839,7 +1000,7 @@ async def auto_apply_stream(job_url: str, session_id: str = ""):
                 yield {"data": json.dumps({"step": "tailor", "tailored": False,
                     "no_jd": True, "original_url": "/demo-resume"})}
                 yield {"data": json.dumps({"step": "applying",
-                    "msg": "ℹ️ Job description isn't readable here (e.g. behind login) — "
+                    "msg": "ℹ️ Job description isn't readable here (site blocks readers — login or anti-bot) — "
                            "applying with your base résumé."})}
             else:
                 score = int(analysis.get("score", 0) or 0)
@@ -858,9 +1019,15 @@ async def auto_apply_stream(job_url: str, session_id: str = ""):
                         "msg": "ℹ️ Applying with the base résumé (couldn't meaningfully tailor)."})}
 
         yield {"data": json.dumps({"step": "applying", "msg": "🚀 Launching browser agent…"})}
+        yield {"data": json.dumps({"step": "applying",
+            "msg": ("🤖 Autopilot ON — the agent only asks if it gets stuck."
+                    if autopilot else "👀 Supervised mode — you'll confirm each step and the final submit.")})}
 
         from google import genai
-        gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        # 120s HTTP timeout: a stalled Gemini call must fail (and surface in the
+        # UI) instead of freezing the apply run forever.
+        gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"),
+                                     http_options={"timeout": 120_000})
 
         # Thread-safe channels between this SSE loop (main) and the apply worker.
         event_q:  queue.Queue = queue.Queue()   # worker → browser (notify/question/result)
@@ -902,7 +1069,7 @@ async def auto_apply_stream(job_url: str, session_id: str = ""):
                 res = loop.run_until_complete(run_application(
                     job_url=job_url, resume_path=resume_path, user_id=user_id,
                     gemini_client=gemini_client, model="gemini-3.5-flash",
-                    pro_model="gemini-3.5-flash", auto_submit=True,
+                    pro_model="gemini-3.5-flash", auto_submit=bool(autopilot),
                     on_notify=on_notify, on_stuck=on_stuck, on_screenshot=on_screenshot,
                 ))
                 event_q.put({"type": "result", "result": res})
@@ -938,15 +1105,20 @@ async def auto_apply_stream(job_url: str, session_id: str = ""):
                         yield {"data": json.dumps({"step": "apply_unavailable",
                             "msg": "Run: playwright install chromium to enable auto-apply."})}
                     else:
-                        yield {"data": json.dumps({"step": "error", "msg": msg[:400]})}
+                        yield {"data": json.dumps({"step": "error", "msg": _friendly_error(msg)[:400]})}
                     break
 
                 elif kind == "result":
                     result = item["result"]
                     status = "Submitted" if result.status == "success" else "Failed"
+                    # getattr: result may be EasyApplyResult or ExternalApplyResult —
+                    # a missing attribute must never crash the stream after a
+                    # successful submit.
+                    _job_title = getattr(result, "job_title", "") or _extract_title(result_data.get("job_description", ""))
+                    _company   = getattr(result, "company", "")   or _extract_company(result_data.get("job_description", ""))
                     _log_application(session_id, {
-                        "job_title":   result.job_title or _extract_title(result_data.get("job_description", "")),
-                        "company":     result.company   or _extract_company(result_data.get("job_description", "")),
+                        "job_title":   _job_title,
+                        "company":     _company,
                         "job_url":     job_url, "portal": result.portal,
                         "match_score": score,
                         "final_score": result_data.get("rewrite", {}).get("final_score_estimate", 0),
@@ -954,9 +1126,10 @@ async def auto_apply_stream(job_url: str, session_id: str = ""):
                     })
                     yield {"data": json.dumps({
                         "step": "applied", "status": result.status,
-                        "company": result.company, "job_title": result.job_title,
+                        "company": _company, "job_title": _job_title,
                         "portal": result.portal, "fields_filled": result.fields_filled,
-                        "fields_skipped": result.fields_skipped, "error": result.error,
+                        "fields_skipped": result.fields_skipped,
+                        "error": _friendly_error(result.error or ""),
                         "notifications": notifications,
                         "msg": f"{'Submitted!' if result.status=='success' else 'Done'} — {result.portal}",
                     })}

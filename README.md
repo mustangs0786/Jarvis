@@ -75,7 +75,7 @@ Clean split: résumé pipeline always uses Gemini; only the browser agent is swa
 ### 1. Clone & install
 
 ```bash
-git clone https://github.com/Mustangs007/careerai.git
+git clone https://github.com/mustangs0786/Jarvis.git
 cd careerai
 uv sync
 uv run playwright install --with-deps chromium

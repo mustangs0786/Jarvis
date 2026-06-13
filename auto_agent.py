@@ -48,7 +48,9 @@ FLASH_MODEL = "gemini-3.5-flash"
 
 # Persistent browser profile — stores cookies/sessions (NOT passwords) so a login
 # done once is reused on every future run. Same idea as the LinkedIn cookie file.
-PROFILE_DIR = Path("browser_profile")
+# Overridable so parallel runs (e.g. a test harness next to the web app) don't
+# fight over one Chrome profile — two launches on the same dir kill each other.
+PROFILE_DIR = Path(os.getenv("APPLY_PROFILE_DIR", "browser_profile"))
 
 # A page is an auth/login wall if its URL looks like one or it has a password box.
 AUTH_URL_HINTS = ("login", "signin", "sign-in", "b2clogin", "/auth", "okta",
@@ -62,8 +64,44 @@ OVERLAY_TEXTS = [
     "Accept all cookies", "Accept All Cookies", "Accept all", "Accept All",
     "Accept Cookies", "Accept cookies", "Allow all cookies", "Allow all", "Allow All",
     "I Agree", "I agree", "Agree and continue", "Agree", "Got it", "Understood",
-    "Reject all", "Reject All", "Decline", "No thanks",
+    "Reject all", "Reject All", "Decline", "No thanks", "Accept", "Close", "Dismiss",
 ]
+
+# Marketing/AMA/newsletter popups that cover the form — no cookie text, just an
+# X close button. Clicking these close buttons clears the overlay so the form
+# underneath becomes interactable. Runs before every fill pass.
+_CLOSE_BUTTON_JS = r"""
+() => {
+  let clicked = 0;
+  const sels = [
+    '[aria-label*="close" i]', '[aria-label*="dismiss" i]',
+    'button[class*="close" i]', '[class*="modal"] [class*="close" i]',
+    '[data-dismiss]', '[data-testid*="close" i]', '.modal-close', '.close-button',
+  ];
+  for (const sel of sels) {
+    for (const el of document.querySelectorAll(sel)) {
+      const r = el.getBoundingClientRect();
+      const visible = r.width > 0 && r.height > 0 && r.width < 120 && r.height < 120;
+      if (visible && el.offsetParent !== null) {
+        try { el.click(); clicked++; } catch (e) {}
+        if (clicked >= 3) return clicked;
+      }
+    }
+  }
+  // Buttons/links whose entire visible text is an X glyph (×, ✕, ✖, X)
+  for (const el of document.querySelectorAll('button, a, span[role="button"]')) {
+    const t = (el.textContent || '').trim();
+    if (['×','✕','✖','✗','x','X','╳'].includes(t)) {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.width < 80 && el.offsetParent !== null) {
+        try { el.click(); clicked++; } catch (e) {}
+        if (clicked >= 3) return clicked;
+      }
+    }
+  }
+  return clicked;
+}
+"""
 
 
 # ── Element collection (pierces shadow DOM; returns boxes for set-of-marks) ──
@@ -459,6 +497,18 @@ async def push_shot(page, user_id: int, step: int, on_screenshot, tag: str = "")
 # ── Overlay + tab helpers ───────────────────────────────────────────────────
 async def dismiss_overlays(page) -> str:
     """Close cookie/consent overlays that block clicks. Returns text clicked, if any."""
+    # Known consent-manager widgets first (text-independent). osano blocked
+    # clicks on Glean's Greenhouse board in live testing.
+    try:
+        cm = page.locator(".osano-cm-accept-all, .osano-cm-accept, "
+                          "button.osano-cm-dialog__close, #onetrust-accept-btn-handler, "
+                          ".cky-btn-accept, button[aria-label='Accept all']").first
+        if await cm.count() > 0 and await cm.is_visible():
+            await cm.click(timeout=1500)
+            await page.wait_for_timeout(400)
+            return "consent-manager accept"
+    except Exception:
+        pass
     for frame in page.frames:
         for txt in OVERLAY_TEXTS:
             try:
@@ -502,6 +552,10 @@ async def clear_blocking_overlays(page) -> int:
     for frame in page.frames:
         try:
             total += await frame.evaluate(_BACKDROP_JS) or 0
+        except Exception:
+            continue
+        try:  # close marketing/AMA/newsletter popups (X buttons) that hide the form
+            total += await frame.evaluate(_CLOSE_BUTTON_JS) or 0
         except Exception:
             continue
     return total
@@ -618,7 +672,10 @@ async def try_auto_login(page, creds, on_notify=None) -> bool:
     We only fill an existing Sign-In form — we never create an account automatically."""
     if not (creds.get("email") and creds.get("password")):
         return False
-    email_sel = ("input[type='email'], input[name*='email' i], input[id*='email' i], "
+    # data-automation-id covers Workday, whose email input is type=text with no
+    # email-ish name/id — the generic ladder missed it (Kyndryl live test).
+    email_sel = ("input[data-automation-id='email'], input[data-automation-id='userName'], "
+                 "input[type='email'], input[name*='email' i], input[id*='email' i], "
                  "input[autocomplete='username'], input[name*='user' i], input[id*='user' i], "
                  "input[name*='login' i], input[id*='login' i]")
 
@@ -677,9 +734,17 @@ async def try_auto_login(page, creds, on_notify=None) -> bool:
     except Exception:
         return False
 
-    # Submit: prefer a named Sign-In button, else press Enter in the password box.
+    # Submit: Workday's stable automation-id first, then a named Sign-In button,
+    # else press Enter in the password box.
     clicked = False
-    for txt in ("Sign In", "Log In", "Login", "Sign in", "Log in", "Continue", "Submit"):
+    try:
+        wd_btn = frame.locator("[data-automation-id='signInSubmitButton'], "
+                               "[data-automation-id='click_filter']").first
+        if await wd_btn.count() > 0 and await wd_btn.is_visible():
+            await wd_btn.click(timeout=4000); clicked = True
+    except Exception:
+        pass
+    for txt in ([] if clicked else ("Sign In", "Log In", "Login", "Sign in", "Log in", "Continue", "Submit")):
         try:
             btn = frame.locator(
                 f"button:has-text('{txt}'), input[type=submit][value*='{txt}' i], "

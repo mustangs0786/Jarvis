@@ -40,6 +40,61 @@ SKIP_LABELS = {
 }
 
 
+def _q(text) -> str:
+    """Quote text for CSS attribute / :has-text() selectors — picks a quote
+    char not present in the text so values like "Bachelor's degree" don't
+    break the selector."""
+    text = str(text)
+    if '"' in text and "'" in text:
+        text = text.replace('"', "")
+    return f"'{text}'" if '"' in text else f'"{text}"'
+
+
+def _azure_json(prompt: str, image_b64: str = None):
+    """Azure GPT call (APPLY_MODEL, e.g. gpt-5.4-mini) via apply_llm's client,
+    configured through AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_KEY."""
+    from apply_llm import _openai_json
+    return _openai_json(prompt, image_b64)
+
+
+def _gemini_json(prompt: str, image_b64: str, gemini_client, model: str):
+    """Gemini call returning parsed JSON (text + optional screenshot)."""
+    parts = [{"text": prompt}]
+    if image_b64:
+        parts.append({"inline_data": {"mime_type": "image/png", "data": image_b64}})
+    resp = gemini_client.models.generate_content(
+        model=model, contents=[{"parts": parts}])
+    raw = (resp.text or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    return json.loads(raw)
+
+
+def _llm_json(prompt: str, image_b64: str = None,
+              gemini_client=None, model: str = ""):
+    """Engine LLM call honoring APPLY_LLM from .env:
+        openai → Azure GPT first, Gemini as backup
+        gemini → Gemini first, Azure GPT as backup
+    Either side failing (429 quota, timeout, bad JSON) falls through to the
+    other, so one dead provider never stalls an apply run."""
+    from apply_llm import APPLY_LLM
+    if APPLY_LLM == "openai":
+        try:
+            return _azure_json(prompt, image_b64)
+        except Exception as e:
+            logger.warning(f"  Azure GPT failed ({e}) — trying Gemini")
+            if not gemini_client:
+                raise
+            return _gemini_json(prompt, image_b64, gemini_client, model)
+    try:
+        if not gemini_client:
+            raise RuntimeError("no gemini client")
+        return _gemini_json(prompt, image_b64, gemini_client, model)
+    except Exception as e:
+        logger.warning(f"  Gemini failed ({e}) — trying Azure GPT")
+        return _azure_json(prompt, image_b64)
+
+
 # ── Session whiteboard ────────────────────────────────────────────────────────
 
 class Whiteboard:
@@ -110,6 +165,8 @@ class EasyApplyResult:
     def __init__(self):
         self.status          = "pending"
         self.portal          = "linkedin"
+        self.job_title       = ""   # app.py reads these when reporting the result
+        self.company         = ""
         self.fields_filled   = []
         self.fields_skipped  = []
         self.fields_learned  = []
@@ -171,10 +228,13 @@ Rules:
 - For numeric steppers (+/- buttons): use click on the correct button
 - If you see ANY file input (input[type='file']) in the HTML: you MUST include an upload action for it with value "__RESUME__". Never skip it.
 - Skip: follow company checkboxes, I agree checkboxes, privacy/terms, submit/next buttons, hidden inputs
-- Values MUST come from profile JSON or resume text — NEVER invent, infer, or guess. Use null if not explicitly present.
-- For skills/technologies NOT mentioned in the resume text: return null (do not guess 0 or any number).
+- Values MUST come from profile JSON or resume text — NEVER invent values unrelated to the candidate.
+- For numeric "years of experience in X" questions: if X appears in the resume, estimate years from context. If X is broadly in the candidate's domain, use years_experience from profile as an upper-bound estimate. Never return null for these — always provide a whole number ≥ 1.
+- For "how soon can you join" / "notice period in days" fields: convert notice_period from profile to days (e.g. "30 days"→30, "2 months"→60, "immediate"→0, "serving notice"→30). If notice_period is missing, default to 30. Never return null.
+- For yes/no skill questions: answer "Yes" if the resume clearly mentions it, "No" otherwise. Never return null.
+- For yes/no questions about visa/sponsorship/work authorization: applicant is Indian citizen in India, use "No" or equivalent.
 - For numeric experience fields that require a whole number: use standard rounding (e.g. 5.7 → 6, 6.3 → 6, 6.5 → 7). Never truncate.
-- For yes/no questions about visa/sponsorship/work authorization: applicant is Indian citizen in India, use "No" or equivalent
+- For fields completely unrelated to the candidate with no basis at all in profile or resume: return null.
 - Return ONLY a valid JSON array, no markdown, no explanation
 
 === PROFILE JSON ===
@@ -188,10 +248,23 @@ Rules:
 """
 
 
+def _compact_html(html: str, max_chars: int = 60_000) -> str:
+    """Shrink raw modal HTML before sending it to the LLM: drop svg/style/script
+    blocks and HTML comments, collapse whitespace, cap total size. LinkedIn
+    modals carry hundreds of KB of decoration — huge prompts made the analyze
+    call take minutes (or stall) without improving field detection."""
+    html = re.sub(r"<(svg|style|script)\b.*?</\1>", "", html, flags=re.S | re.I)
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    html = re.sub(r"[ \t]+", " ", html)
+    html = re.sub(r"\n\s*\n+", "\n", html)
+    return html[:max_chars]
+
+
 async def analyze_modal(modal_html: str, profile: dict, resume_text: str,
                         gemini_client, model: str) -> list:
-    """Send full modal HTML + profile to Gemini. Returns list of browser actions."""
-    if not gemini_client:
+    """Send compacted modal HTML + profile to the apply LLM (APPLY_LLM order).
+    Returns list of browser actions."""
+    if not gemini_client and not os.getenv("AZURE_OPENAI_KEY"):
         return []
 
     safe_profile = {k: v for k, v in profile.items()
@@ -200,23 +273,23 @@ async def analyze_modal(modal_html: str, profile: dict, resume_text: str,
     prompt = GEMINI_PROMPT.format(
         profile=json.dumps(safe_profile, indent=2),
         resume_text=resume_text[:5000],
-        modal_html=modal_html,
+        modal_html=_compact_html(modal_html),
     )
 
     try:
-        response = gemini_client.models.generate_content(
-            model=model,
-            contents=prompt,
+        data = _llm_json(
+            prompt + '\n\nIf you must return a JSON object, wrap the array as {"actions": [...]}.',
+            gemini_client=gemini_client, model=model,
         )
-        raw = (response.text or "").strip()
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        actions = json.loads(raw)
-        logger.info(f"  Gemini planned {len(actions)} actions")
-        return actions if isinstance(actions, list) else []
+        if isinstance(data, dict):
+            data = data.get("actions") or next(
+                (v for v in data.values() if isinstance(v, list)), [])
+        if isinstance(data, list):
+            logger.info(f"  Planned {len(data)} actions")
+            return data
     except Exception as e:
-        logger.error(f"  Gemini analysis failed: {e}")
-        return []
+        logger.error(f"  Form analysis failed on both LLMs: {e}")
+    return []
 
 
 # ── Modal helpers ─────────────────────────────────────────────────────────────
@@ -234,18 +307,9 @@ async def is_modal_open(page) -> bool:
                 return True
         except Exception:
             continue
-    # Text fallback — modal always has these phrases
-    try:
-        body = (await page.inner_text("body") or "").lower()
-        if any(p in body for p in [
-            "contact info", "phone number", "upload resume",
-            "work experience", "submit application", "easy apply",
-            "review your application", "application submitted",
-            "mobile phone", "email address",
-        ]):
-            return True
-    except Exception:
-        pass
+    # NOTE: no body-text fallback here — phrases like "easy apply" appear on
+    # every LinkedIn job page (the button itself), which made this function
+    # return True even when no modal was open.
     return False
 
 
@@ -343,23 +407,57 @@ async def click_easy_apply(page) -> bool:
     return False
 
 
-async def click_next_or_submit(page) -> str:
-    """Click Next/Review/Submit. Returns 'submit'|'review'|'next'|'none'."""
-    for text, label in [
+async def find_next_button(page):
+    """Find the Next/Review/Submit button WITHOUT clicking it.
+    Returns (element, kind) where kind is 'submit'|'review'|'next'|'none'.
+    Scoped to the modal so a stray 'Next' elsewhere on the page never matches.
+    (:has-text() is case-insensitive, so one spelling per button suffices.)"""
+    scope = page.locator(MODAL_SEL).first
+    try:
+        if not await scope.count():
+            scope = page
+    except Exception:
+        scope = page
+    for text, kind in [
         ("Submit application", "submit"),
-        ("Submit Application", "submit"),
         ("Review", "review"),
         ("Next", "next"),
     ]:
         try:
-            btn = page.locator(f"button:has-text('{text}')").first
+            btn = scope.locator(f"button:has-text('{text}')").first
             if await btn.count() > 0 and await btn.is_visible() and await btn.is_enabled():
-                await btn.click(timeout=5000)
-                logger.info(f"  Clicked {text}")
-                return label
+                return btn, kind
         except Exception:
             continue
-    return "none"
+    return None, "none"
+
+
+async def check_submitted(page) -> bool:
+    """Verify the application was actually submitted.
+    Looks for the post-submit dialog text or the job card's 'Applied' badge —
+    never a bare 'applied' substring, which false-positives on job titles
+    like 'Applied Scientist' or companies like 'Applied Materials'."""
+    try:
+        body = (await page.inner_text("body") or "").lower()
+        if any(p in body for p in [
+            "application was sent", "application submitted",
+            "your application was sent", "you've applied",
+            "successfully applied",
+        ]):
+            return True
+    except Exception:
+        pass
+    try:
+        badge = page.locator(
+            ".artdeco-inline-feedback__message, .jobs-s-apply__applied-date, "
+            ".post-apply-timeline"
+        ).first
+        if await badge.count() > 0 and await badge.is_visible():
+            if "applied" in ((await badge.inner_text()) or "").lower():
+                return True
+    except Exception:
+        pass
+    return False
 
 
 # ── Label extractor ───────────────────────────────────────────────────────────
@@ -406,14 +504,14 @@ async def handle_autocomplete(page, modal, label: str, value: str,
     pass both to Pro Gemini to detect and click any dropdown.
     Retries up to max_attempts times if dropdown still visible.
     """
-    if not gemini_client:
+    if not gemini_client and not os.getenv("AZURE_OPENAI_KEY"):
         return False
 
     for attempt in range(max_attempts):
         try:
             # Scroll input into view so dropdown is visible in screenshot
             try:
-                el = page.locator(f"[aria-label*='{label}'], input:visible").first
+                el = page.locator(f"[aria-label*={_q(label)}], input:visible").first
                 await el.scroll_into_view_if_needed()
             except Exception:
                 pass
@@ -449,19 +547,7 @@ HTML (body):
 
 Reply as JSON only: {{"has_dropdown": true/false, "selector": "selector_or_null", "option_text": "text"}}"""
 
-            response = gemini_client.models.generate_content(
-                model=model,
-                contents=[
-                    {"parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": "image/png", "data": img_bytes}},
-                    ]}
-                ],
-            )
-            raw = (response.text or "").strip()
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            data = json.loads(raw)
+            data = _llm_json(prompt, img_bytes, gemini_client, model)
 
             if not data.get("has_dropdown"):
                 logger.info(f"  Autocomplete: no dropdown detected (attempt {attempt+1})")
@@ -486,12 +572,27 @@ Reply as JSON only: {{"has_dropdown": true/false, "selector": "selector_or_null"
     return False
 
 
+async def _maybe_autocomplete(page, modal, el, label: str, value: str,
+                              gemini_client, model: str):
+    """Run the (expensive) vision autocomplete check only for real typeahead
+    inputs — plain text fields never open dropdowns, and a screenshot+LLM call
+    after every fill was the engine's biggest time sink."""
+    try:
+        ac   = (await el.get_attribute("aria-autocomplete") or "").lower()
+        role = (await el.get_attribute("role") or "").lower()
+    except Exception:
+        ac = role = ""
+    if ac in ("list", "both") or role == "combobox":
+        await handle_autocomplete(page, modal, label, value, gemini_client, model)
+
+
 async def _dispatch_action(page, modal, action: dict, resume_path: str,
                            user_id: int, result: EasyApplyResult,
                            gemini_client, model: str,
                            whiteboard: Whiteboard,
                            on_stuck: Callable, on_screenshot: Callable,
-                           filled_selectors: set):
+                           filled_selectors: set,
+                           profile: dict = None):
     """
     Execute a single Gemini-planned browser action.
     Handles all 10 action types — no type-specific branching outside this function.
@@ -509,8 +610,11 @@ async def _dispatch_action(page, modal, action: dict, resume_path: str,
 
     # ── wait — no element needed ──────────────────────────────────────────
     if act == "wait":
-        ms = int(value or 500)
-        await page.wait_for_timeout(ms)
+        try:
+            ms = int(re.sub(r"[^0-9]", "", str(value or "")) or 500)
+        except Exception:
+            ms = 500
+        await page.wait_for_timeout(min(ms, 10000))
         logger.info(f"  Wait {ms}ms")
         return
 
@@ -539,9 +643,10 @@ async def _dispatch_action(page, modal, action: dict, resume_path: str,
 
     # ── If value is null/None and we need one — ask user ─────────────────
     needs_value = act in ("fill", "click_option", "upload", "press_sequentially", "clear_and_fill")
-    if needs_value and not value:
+    # 0 is a legitimate answer (e.g. notice period 0 days) — only None/"" are missing
+    if needs_value and (value is None or str(value).strip() == ""):
         # Try profile lookup as last resort
-        value = get_field_value(label, {}) or None
+        value = get_field_value(label, profile or {}) or None
         if not value and on_stuck:
             if on_screenshot:
                 try:
@@ -599,7 +704,7 @@ async def _dispatch_action(page, modal, action: dict, resume_path: str,
             await el.fill(str(value))
             logger.info(f"  Filled: {label} = {str(value)[:50]}")
             await page.wait_for_timeout(600)
-            await handle_autocomplete(page, modal, label, str(value), gemini_client, model)
+            await _maybe_autocomplete(page, modal, el, label, str(value), gemini_client, model)
             result.fields_filled.append(label)
             if whiteboard: whiteboard.mark_filled(label)
             filled_selectors.add(selector)
@@ -613,7 +718,7 @@ async def _dispatch_action(page, modal, action: dict, resume_path: str,
             await el.fill(str(value))
             logger.info(f"  Clear+Fill: {label} = {str(value)[:50]}")
             await page.wait_for_timeout(600)
-            await handle_autocomplete(page, modal, label, str(value), gemini_client, model)
+            await _maybe_autocomplete(page, modal, el, label, str(value), gemini_client, model)
             result.fields_filled.append(label)
             if whiteboard: whiteboard.mark_filled(label)
             filled_selectors.add(selector)
@@ -625,7 +730,7 @@ async def _dispatch_action(page, modal, action: dict, resume_path: str,
             await el.press_sequentially(str(value), delay=60)
             logger.info(f"  Typed sequentially: {label} = {str(value)[:50]}")
             await page.wait_for_timeout(800)
-            await handle_autocomplete(page, modal, label, str(value), gemini_client, model)
+            await _maybe_autocomplete(page, modal, el, label, str(value), gemini_client, model)
             result.fields_filled.append(label)
             if whiteboard: whiteboard.mark_filled(label)
             filled_selectors.add(selector)
@@ -667,8 +772,8 @@ async def _dispatch_action(page, modal, action: dict, resume_path: str,
             # Try to find the dropdown list (LinkedIn renders outside modal)
             option_found = False
             for list_sel in [
-                f"[role='option']:has-text('{value}')",
-                f"li:has-text('{value}')",
+                f"[role='option']:has-text({_q(value)})",
+                f"li:has-text({_q(value)})",
                 f"[role='listbox'] [role='option']",
                 f"ul[role='listbox'] li",
                 f".dropdown__option",
@@ -753,6 +858,7 @@ async def fill_step(page, profile: dict, resume_path: str,
             whiteboard=whiteboard,
             on_stuck=on_stuck, on_screenshot=on_screenshot,
             filled_selectors=filled_selectors,
+            profile=profile,
         )
         await page.wait_for_timeout(200)
 
@@ -768,10 +874,10 @@ async def autonomous_nav_recovery(page, step_num: int, gemini_client,
     When Next/Submit button not found:
     1. Take screenshot
     2. Ask Pro Gemini what's blocking navigation (validation error, dropdown, missing field)
-    3. Gemini returns action to fix it
+    3. LLM returns action to fix it
     4. Playwright executes fix
     """
-    if not gemini_client:
+    if not gemini_client and not os.getenv("AZURE_OPENAI_KEY"):
         return False
 
     try:
@@ -807,17 +913,7 @@ Reply as JSON only:
 HTML:
 {body_html}"""
 
-        response = gemini_client.models.generate_content(
-            model=model,
-            contents=[{"parts": [
-                {"text": prompt},
-                {"inline_data": {"mime_type": "image/png", "data": img_b64}},
-            ]}],
-        )
-        raw = (response.text or "").strip()
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        data = json.loads(raw)
+        data = _llm_json(prompt, img_b64, gemini_client, model)
 
         logger.info(f"  Recovery diagnosis: {data.get('issue', '?')}")
         action = data.get("action", "")
@@ -866,6 +962,7 @@ async def run_easy_apply(
     on_stuck:      Callable = None,
     on_screenshot: Callable = None,
     on_notify:     Callable = None,
+    autopilot:     bool = True,
 ) -> EasyApplyResult:
     from playwright.async_api import async_playwright
 
@@ -896,11 +993,15 @@ async def run_easy_apply(
         )
         await ctx.add_cookies(cookies)
         page = await ctx.new_page()
+        cast = None  # live screencast task — started after first navigation
 
         try:
             logger.info(f"  Loading: {job_url}")
             await page.goto(job_url, wait_until="domcontentloaded", timeout=30000)
             await page.wait_for_timeout(3000)
+
+            from screencast import start_screencast
+            cast = start_screencast(page, on_screenshot, user_id)
 
             # Debug: screenshot + title so we can see what loaded
             page_title = await page.title()
@@ -918,6 +1019,9 @@ async def run_easy_apply(
                 external_url = getattr(page, "_external_apply_url", None)
                 if external_url:
                     logger.info(f"  Routing to external apply: {external_url[:80]}")
+                    from screencast import stop_screencast as _stop
+                    await _stop(cast)
+                    cast = None
                     await browser.close()
                     # Not Easy Apply after all — clicking Apply opened the company's
                     # own portal in a new tab. Drive it with the SAME mature engine the
@@ -961,6 +1065,24 @@ async def run_easy_apply(
             if on_notify:
                 await on_notify("✅ Easy Apply modal opened — filling your details...")
 
+            async def confirm_submit() -> bool:
+                """Ask the user BEFORE clicking Submit — it can't be undone.
+                Autopilot submits without asking; questions are reserved for
+                genuinely stuck moments (unknown fields, failed navigation)."""
+                if autopilot or not on_stuck:
+                    return True
+                try:
+                    ss_path = f"output/ea_{user_id}_prefinal.png"
+                    await page.screenshot(path=ss_path, full_page=False)
+                    if on_screenshot:
+                        await on_screenshot(ss_path)
+                except Exception:
+                    pass
+                reply = (await on_stuck(
+                    "Ready to submit? Reply *submit* to apply now, or *cancel* to stop."
+                ) or "").strip().lower()
+                return reply in ("submit", "yes", "y", "ok")
+
             step_num  = 0
             submitted = False
 
@@ -968,11 +1090,7 @@ async def run_easy_apply(
                 await page.wait_for_timeout(1500)
 
                 if not await is_modal_open(page):
-                    body = (await page.inner_text("body") or "").lower()
-                    submitted = any(p in body for p in [
-                        "application submitted", "you've applied",
-                        "applied", "application was sent", "successfully applied",
-                    ])
+                    submitted = await check_submitted(page)
                     break
 
                 step_num += 1
@@ -1007,7 +1125,7 @@ async def run_easy_apply(
                     )
                     # Send filled summary to user after each step
                     if on_notify and result.fields_filled:
-                        last_filled = result.fields_filled[-(len(wb.steps[-1]["filled"])):] if wb.steps else []
+                        last_filled = wb.steps[-1]["filled"] if wb.steps else []
                         if last_filled:
                             filled_txt = "\n".join(f"  ✅ {f}" for f in last_filled)
                             await on_notify(f"📝 *Step {step_num} filled:*\n{filled_txt}")
@@ -1030,8 +1148,8 @@ async def run_easy_apply(
 
                 await take_step_screenshot()
 
-                # ── Human-in-loop review ──────────────────────────────────
-                if on_stuck and not is_review:
+                # ── Human-in-loop review (supervised mode only) ───────────
+                if on_stuck and not is_review and not autopilot:
                     for _fix_attempt in range(4):  # max 3 fix attempts per step
                         reply = (await on_stuck(
                             f"Step {step_num} filled. Reply *ok* to continue, "
@@ -1059,13 +1177,8 @@ Form HTML:
 Return ONE browser action as JSON to fix exactly what the user described:
 {{"action": "fill|click|click_option|clear_and_fill|press_sequentially", "selector": "css selector", "value": "new value", "label": "field name"}}
 Return ONLY the JSON object, no markdown."""
-                            fix_response = gemini_client.models.generate_content(
-                                model=pro_model or model, contents=fix_prompt
-                            )
-                            fix_raw = (fix_response.text or "").strip()
-                            fix_raw = re.sub(r"^```(?:json)?\s*", "", fix_raw)
-                            fix_raw = re.sub(r"\s*```$", "", fix_raw)
-                            fix_action = json.loads(fix_raw)
+                            fix_action = _llm_json(fix_prompt, None,
+                                                   gemini_client, pro_model or model)
                             modal_el2 = page.locator(MODAL_SEL).first
                             await _dispatch_action(
                                 page=page, modal=modal_el2, action=fix_action,
@@ -1074,6 +1187,7 @@ Return ONLY the JSON object, no markdown."""
                                 model=pro_model or model, whiteboard=None,
                                 on_stuck=None, on_screenshot=None,
                                 filled_selectors=set(),
+                                profile=profile,
                             )
                             await page.wait_for_timeout(800)
                         except Exception as e:
@@ -1083,35 +1197,29 @@ Return ONLY the JSON object, no markdown."""
                         await take_step_screenshot()
 
                 # ── Determine next action ─────────────────────────────────
-                action = await click_next_or_submit(page)
+                # Find the button FIRST so the user can confirm BEFORE we
+                # click Submit — a post-click confirmation can't cancel.
+                btn, action = await find_next_button(page)
+
+                if action == "submit" and not await confirm_submit():
+                    result.status = "cancelled"
+                    result.steps_completed = step_num
+                    if on_notify:
+                        await on_notify("❌ Application cancelled.")
+                    break
+
+                if btn is not None:
+                    try:
+                        await btn.click(timeout=5000)
+                        logger.info(f"  Clicked {action}")
+                    except Exception as e:
+                        logger.info(f"  Click failed ({action}): {e}")
+                        action = "none"
                 await page.wait_for_timeout(2000)
 
                 if action == "submit":
-                    # Ask user to confirm before final submission
-                    if on_stuck:
-                        ss_path = f"output/ea_{user_id}_prefinal.png"
-                        try:
-                            await page.screenshot(path=ss_path, full_page=False)
-                            if on_screenshot:
-                                await on_screenshot(ss_path)
-                        except Exception:
-                            pass
-                        confirm = (await on_stuck(
-                            "Ready to submit? Reply *submit* to apply now, or *cancel* to stop."
-                        ) or "").strip().lower()
-                        if confirm not in ("submit", "yes", "y", "ok"):
-                            result.status = "cancelled"
-                            result.steps_completed = step_num
-                            if on_notify:
-                                await on_notify("❌ Application cancelled.")
-                            break
-
                     await page.wait_for_timeout(4000)
-                    body = (await page.inner_text("body") or "").lower()
-                    submitted = any(p in body for p in [
-                        "application submitted", "you've applied",
-                        "applied", "application was sent",
-                    ])
+                    submitted = await check_submitted(page)
                     result.steps_completed = step_num
                     break
 
@@ -1123,12 +1231,24 @@ Return ONLY the JSON object, no markdown."""
                     )
                     if recovered:
                         # Gemini fixed something — retry navigation
-                        action = await click_next_or_submit(page)
+                        btn, action = await find_next_button(page)
+                        if action == "submit" and not await confirm_submit():
+                            result.status = "cancelled"
+                            result.steps_completed = step_num
+                            if on_notify:
+                                await on_notify("❌ Application cancelled.")
+                            break
+                        if btn is not None:
+                            try:
+                                await btn.click(timeout=5000)
+                            except Exception:
+                                action = "none"
                         await page.wait_for_timeout(2000)
                         if action in ("next", "review", "submit"):
                             logger.info(f"  Recovery succeeded → {action}")
                             if action == "submit":
                                 await page.wait_for_timeout(4000)
+                                submitted = await check_submitted(page)
                                 result.steps_completed = step_num
                                 break
                             continue
@@ -1149,11 +1269,12 @@ Return ONLY the JSON object, no markdown."""
                             continue
                     break
 
-            # Final status
-            result.status = "success" if submitted else "failed"
+            # Final status — never clobber an explicit user cancel
+            if result.status != "cancelled":
+                result.status = "success" if submitted else "failed"
+                if not submitted and not result.error:
+                    result.error = f"Completed {step_num} steps but no submit confirmation"
             result.steps_completed = step_num
-            if not submitted and not result.error:
-                result.error = f"Completed {step_num} steps but no submit confirmation"
 
             # Final screenshot
             try:
@@ -1179,6 +1300,8 @@ Return ONLY the JSON object, no markdown."""
             except Exception:
                 pass
         finally:
+            from screencast import stop_screencast
+            await stop_screencast(cast)
             await browser.close()
 
     logger.info(
@@ -1197,10 +1320,12 @@ if __name__ == "__main__":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="  %(message)s")
 
-    # Pick latest PDF in user profile dir
-    _profile_dir = Path(r"D:\Projects\Resume_Builder\user_profiles\917484502")
+    USER_ID = int(os.getenv("EA_USER_ID", "1"))  # matches dir in user_profiles/
+
+    # Pick latest PDF in the user's profile dir; fall back to the demo resume
+    _profile_dir = Path("user_profiles") / str(USER_ID)
     _pdfs = sorted(_profile_dir.glob("*.pdf"), key=lambda f: f.stat().st_mtime, reverse=True)
-    DEFAULT_RESUME = str(_pdfs[0]) if _pdfs else ""
+    DEFAULT_RESUME = str(_pdfs[0]) if _pdfs else "samples/demo_resume.pdf"
 
     if len(sys.argv) < 2:
         print("Usage: python linkedin_easy_apply.py <linkedin_job_url> [resume_pdf]")
@@ -1227,8 +1352,6 @@ if __name__ == "__main__":
     _gemini = _genai.Client(api_key=os.getenv("GEMINI_API_KEY", ""))
     _model     = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")       # field identification
     _pro_model = os.getenv("GEMINI_PRO_MODEL", "gemini-3.5-flash")  # autonomous decisions
-
-    USER_ID = 917484502  # Telegram user id — matches profile in user_profiles/
 
     print("\nLinkedIn Easy Apply — LIVE\n")
     print(f"  Profile : user_profiles/{USER_ID}/profile.json")

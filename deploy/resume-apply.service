@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=azureuser
-WorkingDirectory=/home/azureuser/Resume_Builder
+WorkingDirectory=/home/azureuser/Jarvis
 Environment=PYTHONUNBUFFERED=1
 # Reads GEMINI/OpenAI/Azure keys etc. from .env via python-dotenv (load_dotenv in app.py).
 # xvfb-run gives the headful Chromium (headless=False) a virtual display so it runs on a

@@ -321,17 +321,17 @@ async def _check_consent_boxes(page) -> int:
                         except Exception:
                             pass
 
-                        # Fallback: click the parent label
+                        # Fallback: set the input directly via JS. NEVER click the
+                        # label — consent labels often contain links ("arbitration
+                        # agreement", "privacy policy") and a label click can land
+                        # on the link and navigate off the application.
                         if not await box.is_checked():
                             try:
-                                lbl = frame.locator(f"label:has(input[type='checkbox'])")
-                                cnt = await lbl.count()
-                                for li in range(cnt):
-                                    l = lbl.nth(li)
-                                    if await l.is_visible():
-                                        await l.scroll_into_view_if_needed()
-                                        await l.click(force=True, timeout=2000)
-                                        break
+                                await box.evaluate(
+                                    "el => { el.checked = true;"
+                                    " el.dispatchEvent(new Event('input',  {bubbles:true}));"
+                                    " el.dispatchEvent(new Event('change', {bubbles:true})); }"
+                                )
                             except Exception:
                                 pass
 

@@ -74,6 +74,35 @@ async def _click_submit(page) -> bool:
     return False
 
 
+async def _canonical_form_url(page) -> str:
+    """If the page embeds an ATS application form in an iframe, return the bare
+    form's own URL so we can navigate straight to it (no marketing wrapper).
+    Returns '' if the page already IS the form.
+
+    Greenhouse embeds as job-boards.greenhouse.io/embed/job_app?for=<slug>&token=<id>
+    → the clean board form is job-boards.greenhouse.io/<slug>/jobs/<id>.
+    Lever/Ashby/SmartRecruiters embed the bare form URL directly as the iframe src."""
+    from urllib.parse import urlparse, parse_qs
+    try:
+        srcs = await page.evaluate(
+            "[...document.querySelectorAll('iframe')].map(f=>f.src).filter(Boolean)")
+    except Exception:
+        return ""
+    for src in srcs or []:
+        s = src.lower()
+        if "greenhouse.io/embed/job_app" in s:
+            q = parse_qs(urlparse(src).query)
+            slug = (q.get("for") or [""])[0]
+            token = (q.get("token") or [""])[0]
+            if slug and token:
+                return f"https://job-boards.greenhouse.io/{slug}/jobs/{token}"
+            return src  # fall back to the embed itself (still chrome-free)
+        if any(k in s for k in ("jobs.lever.co", "jobs.ashbyhq.com",
+                                "jobs.smartrecruiters.com", "myworkdayjobs.com")):
+            return src
+    return ""
+
+
 async def run_application(
     job_url: str,
     resume_path: str,
@@ -122,7 +151,11 @@ async def run_application(
                 await on_notify("⚡ LinkedIn Easy Apply detected — filling with your saved session…")
             ea = await run_easy_apply(job_url=job_url, resume_path=resume_path, user_id=user_id,
                                       gemini_client=gemini_client, model=model, pro_model=pro_model,
-                                      on_stuck=on_stuck, on_screenshot=on_screenshot, on_notify=on_notify)
+                                      on_stuck=on_stuck, on_screenshot=on_screenshot, on_notify=on_notify,
+                                      autopilot=auto_submit)
+            # Enrich with the job info we already resolved — the UI shows these
+            ea.job_title = resolved.get("job_title", "") or getattr(ea, "job_title", "")
+            ea.company   = resolved.get("company", "")   or getattr(ea, "company", "")
             log_application(user_id, {"job_url": job_url, "job_title": getattr(ea, "job_title", ""),
                                       "company": getattr(ea, "company", ""), "portal": "linkedin_easy_apply",
                                       "status": ea.status, "fields_filled": ea.fields_filled,
@@ -151,7 +184,7 @@ async def run_application(
     async with async_playwright() as p:
         Path(PROFILE_DIR).mkdir(parents=True, exist_ok=True)
         ctx = await p.chromium.launch_persistent_context(
-            str(PROFILE_DIR), headless=False,
+            str(PROFILE_DIR), headless=bool(int(os.getenv("APPLY_HEADLESS", "0"))),
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             viewport={"width": 1280, "height": 900},
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -160,9 +193,46 @@ async def run_application(
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
+        from screencast import start_screencast, stop_screencast
+        cast = start_screencast(page, on_screenshot, user_id)
+
         try:
-            await page.goto(job_url, wait_until="domcontentloaded", timeout=60000)
+            # Retry the first navigation on transient network/DNS errors
+            # (ERR_NAME_NOT_RESOLVED, ERR_CONNECTION_RESET, timeouts) — a single
+            # blip used to kill the whole run before the form ever loaded.
+            for _nav in range(3):
+                try:
+                    await page.goto(job_url, wait_until="domcontentloaded", timeout=60000)
+                    break
+                except Exception as nav_ex:
+                    msg = str(nav_ex).lower()
+                    transient = any(k in msg for k in (
+                        "err_name_not_resolved", "err_connection", "err_network",
+                        "err_timed_out", "timeout", "err_internet_disconnected"))
+                    if _nav < 2 and transient:
+                        if on_notify:
+                            await on_notify(f"🌐 Network hiccup loading the page — retrying ({_nav+1}/3)…")
+                        await page.wait_for_timeout(2500)
+                        continue
+                    raise
             await page.wait_for_timeout(2000)
+
+            # Marketing careers pages embed the real ATS form in an iframe,
+            # wrapped in cookie banners, popups, chat widgets and a tall hero
+            # (form below the fold). Go straight to the embedded form's own URL —
+            # the bare ATS form has none of that chrome. This removes a whole
+            # class of failures instead of patching each wrapper.
+            try:
+                canon = await _canonical_form_url(page)
+                if canon and canon != page.url:
+                    if on_notify:
+                        await on_notify("🎯 Jumping to the embedded application form…")
+                    await page.goto(canon, wait_until="domcontentloaded", timeout=45000)
+                    await page.wait_for_timeout(1500)
+                    result.portal = domain_of(page.url) or result.portal
+            except Exception as ex:
+                logger.debug(f"canonicalize skipped: {ex}")
+
             try:
                 result.job_title = result.job_title or (await page.title()).split("|")[0].strip()[:80]
             except Exception:
@@ -175,8 +245,27 @@ async def run_application(
             stuck_pages = 0
             last_url = ""
             no_progress = 0
+            last_filled_sig = ()
+            visited_urls = {}   # url → iteration count, detects redirect loops
+
+            from apply_engine import _site_domain
+            app_dom = ""  # locked once we're past the gateway (it>2 or first converge)
 
             for it in range(1, MAX_ITERS + 1):
+                # Origin guard: a mis-click on an in-form link (privacy policy,
+                # arbitration agreement…) navigates off the application AND looks
+                # like an "advance" (URL changed). Walk back to the form. Never
+                # triggers on auth pages (login domains can legitimately differ).
+                if app_dom and _site_domain(page.url) != app_dom \
+                        and not await looks_like_auth(page):
+                    if on_notify:
+                        await on_notify("↩️ Wandered off the application — going back")
+                    try:
+                        await page.go_back(wait_until="domcontentloaded", timeout=8000)
+                        await settle(page)
+                    except Exception:
+                        pass
+
                 # No-progress guard: if we've sat on the SAME url for 3 iterations
                 # without ever advancing, we're thrashing (single-page form, stuck
                 # dropdown, etc.) — stop instead of re-filling forever.
@@ -185,9 +274,21 @@ async def run_application(
                 else:
                     no_progress = 0
                 last_url = page.url
-                if no_progress >= 3:
+                if no_progress >= 2:
                     if on_notify:
-                        await on_notify("⏹️ No progress after 3 passes on this page — stopping.")
+                        await on_notify("⏹️ No progress after 2 full passes on this page — stopping.")
+                    if result.status == "pending":
+                        result.status = "incomplete"
+                    break
+
+                # Redirect-loop guard: site bounces between pages (e.g. job
+                # description → form → back to job description). URLs change each
+                # time so the no-progress guard above doesn't catch it.
+                _canon = page.url.split("?")[0].split("#")[0].rstrip("/")
+                visited_urls[_canon] = visited_urls.get(_canon, 0) + 1
+                if visited_urls[_canon] >= 3:
+                    if on_notify:
+                        await on_notify("⏹️ Redirect loop detected — this page keeps coming back.")
                     if result.status == "pending":
                         result.status = "incomplete"
                     break
@@ -198,6 +299,37 @@ async def run_application(
                 if await is_submitted(page):
                     result.status = "success"
                     break
+
+                # ── BLOCKING CAPTCHA wall (DataDome/hCaptcha interstitial — the
+                # form never renders until a human solves it). Must NOT trip on
+                # Greenhouse's INVISIBLE reCAPTCHA badge (a 'recaptcha.net' frame
+                # present on every Greenhouse form that needs no solving). So:
+                # only hand off for known blocking providers AND when the page
+                # has essentially no fillable form on it.
+                _blocking_cap = any(
+                    any(k in (f.url or "").lower() for k in
+                        ("captcha-delivery.com", "datadome", "hcaptcha.com/captcha",
+                         "geo.captcha"))
+                    for f in page.frames)
+                if _blocking_cap:
+                    try:
+                        n_inputs = await page.evaluate(
+                            "document.querySelectorAll('input,select,textarea').length")
+                    except Exception:
+                        n_inputs = 0
+                    if n_inputs < 3:   # real wall: no form behind it
+                        await push_shot(page, user_id, it, on_screenshot, "_captcha")
+                        if on_stuck:
+                            ans = ((await on_stuck("This site shows a CAPTCHA — please solve it in the "
+                                                   "browser window, then reply 'done'.")) or "").strip()
+                            if ans.lower() in _CANCEL_WORDS:
+                                result.status = "cancelled"
+                                break
+                            await settle(page)
+                            continue
+                        result.status = "failed"
+                        result.error = "Blocked by CAPTCHA (anti-bot)."
+                        break
 
                 # ── auth wall: try .env auto-login once, else hand off to user ──
                 if await looks_like_auth(page):
@@ -223,6 +355,30 @@ async def run_application(
                                        "then reply 'done'.")
                     await settle(page)
                     continue
+
+                # ── saved-draft pages: portals (HPE/Phenom, Workday) resume a
+                # previous application behind a "Continue/Resume application"
+                # prompt the gateway classifier doesn't know — click it
+                # deterministically so reruns don't flail on the draft wall.
+                try:
+                    _body = ((await page.inner_text("body")) or "")[:4000].lower()
+                except Exception:
+                    _body = ""
+                if any(t in _body for t in ("continue your application", "resume application",
+                                            "continue application", "where you left off")):
+                    for _t in ("Continue your application", "Resume application",
+                               "Continue application", "Resume", "Continue"):
+                        try:
+                            _b = page.locator(f"button:has-text('{_t}'), a:has-text('{_t}'), "
+                                              f"[role=button]:has-text('{_t}')").first
+                            if await _b.count() > 0 and await _b.is_visible():
+                                if on_notify:
+                                    await on_notify("📂 Resuming a saved application draft…")
+                                await _b.click(timeout=4000)
+                                await settle(page)
+                                break
+                        except Exception:
+                            continue
 
                 # ── gateway: landing/job-desc page → click Apply, follow tab ──
                 # Only early on — once we're filling a form, re-running this just
@@ -254,11 +410,24 @@ async def run_application(
                 if on_notify:
                     await on_notify(f"📋 Page {it} — filling from your profile…")
 
+                if not app_dom:  # first form page = the application's home domain
+                    app_dom = _site_domain(page.url)
+
                 res = await converge_page(page, ctx, profile, user_id=user_id,
-                                          gemini_client=gemini_client, max_attempts=6, creds=creds,
+                                          gemini_client=gemini_client, max_attempts=4, creds=creds,
                                           on_notify=on_notify, on_screenshot=on_screenshot)
                 page = res.get("page", page)
                 _collect_filled(res)
+                # SPA flows (HPE/Phenom iframes) advance steps WITHOUT a URL
+                # change — filling NEW fields is progress. Re-filling the SAME
+                # fields on the same URL is thrash, not progress (a runaway
+                # re-fill loop hit page 14 on one form before this check).
+                import re as _re
+                filled_sig = tuple(sorted(
+                    _re.sub(r"^\[\d+\]\s*", "", f) for f in (res.get("filled") or [])))
+                if filled_sig and filled_sig != last_filled_sig:
+                    no_progress = 0
+                last_filled_sig = filled_sig
 
                 # ── vision audit: fix values that filled but are WRONG ──
                 try:
@@ -267,7 +436,7 @@ async def run_application(
                         nfix = await correct_from_audit(page, profile, audit, on_notify=on_notify)
                         if nfix:
                             res = await converge_page(page, ctx, profile, user_id=user_id,
-                                                      gemini_client=gemini_client, max_attempts=3, creds=creds,
+                                                      gemini_client=gemini_client, max_attempts=2, creds=creds,
                                                       on_notify=on_notify, on_screenshot=on_screenshot)
                             page = res.get("page", page)
                             _collect_filled(res)
@@ -311,6 +480,12 @@ async def run_application(
                         if await is_submitted(page):
                             result.status = "success"
                             break
+                        continue
+                    # May have landed on a gateway/job-description page mid-flow
+                    # (e.g. redirect after form submission, or a multi-step portal).
+                    before = page.url
+                    page = await gateway_advance(page, ctx, gemini_client, on_notify=on_notify)
+                    if page.url != before:
                         continue
                     if await vision_recover(page, profile, res.get("errors") or [],
                                             gemini_client, on_notify=on_notify):
@@ -363,6 +538,7 @@ async def run_application(
                 result.status = result.status if result.status != "pending" else "error"
                 result.error = result.error or str(ex)[:200]
         finally:
+            await stop_screencast(cast)
             try:
                 await ctx.close()
             except Exception:
