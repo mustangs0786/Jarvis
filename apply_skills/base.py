@@ -24,7 +24,8 @@ def json_config():
 async def dispatch_action(page, action: dict, resume_path: str,
                           on_stuck: Callable = None,
                           filled_selectors: set = None,
-                          user_id: int = None) -> bool:
+                          user_id: int = None,
+                          gateway: bool = False) -> bool:
     """
     Execute a single Gemini-planned browser action.
     Returns True if action succeeded, False otherwise.
@@ -182,7 +183,7 @@ async def dispatch_action(page, action: dict, resume_path: str,
                 if any(k in href or k in txt for k in _legal):
                     logger.info(f"  Refusing click on legal/policy link [{label}]")
                     return False
-                if href.startswith("http"):
+                if href.startswith("http") and not gateway:
                     from urllib.parse import urlparse
                     h, p = urlparse(href).netloc, urlparse(page.url).netloc
                     if h and p and h.split(".")[-2:] != p.split(".")[-2:]:

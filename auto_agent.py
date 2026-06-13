@@ -819,7 +819,7 @@ def _is_secret(label: str) -> bool:
     return any(s in (label or "").lower() for s in SECRET_LABELS)
 
 
-async def execute_action(page, action, idx_frame, elements, resume_path, creds):
+async def execute_action(page, action, idx_frame, elements, resume_path, creds, *, gateway=False):
     act = (action.get("action") or "").lower()
     idx = action.get("index")
     val = action.get("value")
@@ -887,5 +887,6 @@ async def execute_action(page, action, idx_frame, elements, resume_path, creds):
         return False, f"upload [{idx}] {label} — no <input type=file> found"
 
     ok = await dispatch_action(
-        page, {"action": dact, "selector": selector, "value": val, "label": label}, resume_path)
+        page, {"action": dact, "selector": selector, "value": val, "label": label}, resume_path,
+        gateway=gateway)
     return ok, f"{act} [{idx}] {label}"

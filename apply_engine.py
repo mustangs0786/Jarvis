@@ -1872,7 +1872,7 @@ async def gateway_advance(page, ctx, gemini_client=None, *, on_notify=None, max_
         try:
             await execute_action(page, {"action": "click", "index": adv_idx,
                                         "label": adv.get("label", "")},
-                                 idx_fr, elems, "", creds)
+                                 idx_fr, elems, "", creds, gateway=True)
         except Exception:
             return page
         await page.wait_for_timeout(2500)
