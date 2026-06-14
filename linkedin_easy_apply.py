@@ -1001,7 +1001,7 @@ async def run_easy_apply(
             await page.wait_for_timeout(3000)
 
             from screencast import start_screencast
-            cast = start_screencast(page, on_screenshot, user_id)
+            cast = start_screencast(ctx, on_screenshot, user_id)
 
             # Debug: screenshot + title so we can see what loaded
             page_title = await page.title()

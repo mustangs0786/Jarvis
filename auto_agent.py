@@ -884,19 +884,35 @@ async def try_create_account(page, creds, on_notify=None) -> bool:
     except Exception:
         pass
 
-    # Submit: Workday's createAccountSubmitButton, then generic text match.
-    # Must scroll into view — Workday's create-account form is long and the
-    # button is below the fold.
+    # Submit: Workday wraps the real submit button in a noCaptchaWrapper that
+    # overlays a click_filter div on top of the actual <button aria-hidden>.
+    # Playwright refuses to click aria-hidden elements, so we must target the
+    # click_filter div first, then fall back to the button (force=True bypasses
+    # the aria-hidden check when the overlay approach fails).
     submitted = False
     try:
-        wd_btn = page.locator(
-            "[data-automation-id='createAccountSubmitButton']").first
-        if await wd_btn.count() > 0:
-            await wd_btn.scroll_into_view_if_needed(timeout=2000)
-            await wd_btn.click(timeout=4000)
+        # The visible overlay div is the real click target when noCaptchaWrapper
+        # is present — it sits on top of the aria-hidden submit button.
+        cf = page.locator(
+            "[data-automation-id='noCaptchaWrapper'] "
+            "[data-automation-id='click_filter']").first
+        if await cf.count() > 0:
+            await cf.scroll_into_view_if_needed(timeout=2000)
+            await cf.click(timeout=4000)
             submitted = True
     except Exception:
         pass
+    if not submitted:
+        try:
+            wd_btn = page.locator(
+                "[data-automation-id='createAccountSubmitButton']").first
+            if await wd_btn.count() > 0:
+                await wd_btn.scroll_into_view_if_needed(timeout=2000)
+                # force=True bypasses aria-hidden / tabindex="-2" check
+                await wd_btn.click(timeout=4000, force=True)
+                submitted = True
+        except Exception:
+            pass
     if not submitted:
         for txt in ("Create Account", "Create account", "Register",
                     "Sign Up", "Sign up", "Submit"):
@@ -935,6 +951,115 @@ async def try_create_account(page, creds, on_notify=None) -> bool:
             pass
 
     return True
+
+
+# ── grounded click diagnostics (HTML + screenshot) ──────────────────────────
+
+_CLICK_DIAG_PROMPT = """A browser automation agent clicked a button/element but the page did NOT
+react (URL unchanged, still on the same auth/form page). The click was silently ignored.
+
+SCREENSHOT of the page (red numbered boxes mark interactive elements):
+(attached image)
+
+HTML of the button area the agent tried to click:
+{html}
+
+Diagnose WHY the click failed and propose an alternative selector/strategy.
+Return STRICT JSON:
+{{
+  "diagnosis": "<one-line reason, e.g. 'button is aria-hidden, overlay div blocks it'>",
+  "alternative_selector": "<CSS selector to click instead, or null>",
+  "use_force": <true if Playwright force=True is needed>,
+  "action": "<click|enter|none>",
+  "reason": "<short explanation>"
+}}
+Return ONLY the JSON object."""
+
+
+async def _extract_submit_html(page, max_len=3000):
+    """Extract HTML of the submit-button area: the noCaptchaWrapper or closest
+    form-submit container. Tries increasingly broad selectors so it works on
+    Workday, Greenhouse, Lever, and generic portals."""
+    for sel in (
+        "[data-automation-id='noCaptchaWrapper']",
+        "button[type='submit']",
+        "[data-automation-id*='submit' i]",
+        "[data-automation-id='createAccountSubmitButton']",
+        "[data-automation-id='signInSubmitButton']",
+        "input[type='submit']",
+        "[role='button']",
+    ):
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() > 0:
+                html = await loc.evaluate(
+                    "e => (e.closest('[data-automation-id=\"noCaptchaWrapper\"]') || e.parentElement || e).outerHTML")
+                return (html or "")[:max_len]
+        except Exception:
+            continue
+    return ""
+
+
+async def diagnose_click_failure(page, gemini_client=None):
+    """When an auth submit click silently fails (page didn't change), capture
+    the button-area HTML + a viewport screenshot, send both to the LLM, and
+    return a diagnosis with an alternative click strategy.
+
+    Returns dict with keys: diagnosis, alternative_selector, use_force, action.
+    Returns None if HTML couldn't be extracted or LLM call fails."""
+    html = await _extract_submit_html(page)
+    if not html:
+        return None
+    try:
+        raw = await page.screenshot(full_page=False)
+    except Exception:
+        return None
+    import base64
+    img_b64 = base64.b64encode(raw).decode()
+    try:
+        result = llm_json(
+            _CLICK_DIAG_PROMPT.format(html=html),
+            image_b64=img_b64,
+            gemini_client=gemini_client,
+            gemini_model=FLASH_MODEL,
+        )
+        return result
+    except Exception:
+        return None
+
+
+async def retry_with_diagnosis(page, diag):
+    """Apply the LLM's suggested alternative click strategy.
+    Returns True if a click was executed, False otherwise."""
+    if not diag:
+        return False
+    action = (diag.get("action") or "none").lower()
+    if action == "none":
+        return False
+
+    sel = diag.get("alternative_selector")
+    force = bool(diag.get("use_force"))
+
+    if sel:
+        try:
+            el = page.locator(sel).first
+            if await el.count() > 0:
+                await el.scroll_into_view_if_needed(timeout=2000)
+                await el.click(timeout=4000, force=force)
+                return True
+        except Exception:
+            pass
+
+    if action == "enter":
+        try:
+            pw = page.locator("input[type='password']:visible").last
+            if await pw.count() > 0:
+                await pw.press("Enter")
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 async def switch_if_new_tab(ctx, page):

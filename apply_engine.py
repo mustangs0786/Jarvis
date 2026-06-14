@@ -1345,10 +1345,20 @@ async def advance(page):
     # page-footer "Save and Continue" button exists but is inert until the
     # account is created.  Checking auth buttons first ensures we click the
     # functional submit (createAccountSubmitButton / signInSubmitButton).
+    # Workday's noCaptchaWrapper overlays a click_filter div on top of
+    # auth buttons — try the overlay first, fall back to the button itself.
+    cfd = page.locator("[data-automation-id='noCaptchaWrapper'] "
+                       "[data-automation-id='click_filter']")
     abt = page.locator("[data-automation-id='signInSubmitButton'], "
                        "[data-automation-id='createAccountSubmitButton']")
     nbt = page.locator(WORKDAY_NEXT_BUTTON)
     sbt = page.locator(WORKDAY_SUBMIT_BUTTON)
+    if await cfd.count() > 0:
+        try:
+            await cfd.first.scroll_into_view_if_needed(timeout=2000)
+            await cfd.first.click(timeout=5000); return True, "AUTH click_filter"
+        except Exception:
+            pass
     if await abt.count() > 0 and await abt.first.is_visible():
         try:
             await abt.first.click(timeout=5000, force=True); return True, "AUTH submit"

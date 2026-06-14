@@ -20,7 +20,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-APPLY_LLM   = os.getenv("APPLY_LLM", "gemini").strip().lower()
+APPLY_LLM   = os.getenv("APPLY_LLM", "openai").strip().lower()
 APPLY_MODEL = os.getenv("APPLY_MODEL", "gpt-5.4-mini").strip()
 GEMINI_MODEL_DEFAULT = "gemini-3.5-flash"
 

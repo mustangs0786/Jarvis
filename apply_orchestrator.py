@@ -33,7 +33,8 @@ from dotenv import load_dotenv
 
 from auto_agent import (settle, dismiss_overlays, clear_blocking_overlays,
                         switch_if_new_tab, looks_like_auth, try_auto_login,
-                        try_create_account, push_shot, PROFILE_DIR, MAX_ITERS)
+                        try_create_account, push_shot, PROFILE_DIR, MAX_ITERS,
+                        diagnose_click_failure, retry_with_diagnosis)
 import apply_engine
 from apply_engine import converge_page, gateway_advance, reveal_rows, resolve_field
 from apply_vision import vision_audit, correct_from_audit, vision_recover, execute_user_instruction
@@ -56,39 +57,20 @@ async def _steer(page, question, user_id, profile, gemini_client, *,
                  cast=None, max_turns=10):
     """Multi-turn human-in-the-loop steering.
 
-    Loop: pause screencast → push full-page screenshot → ask user →
-    resume screencast → if "continue"/cancel break →
-    else execute instruction → save learning → repeat.
+    The live screencast keeps streaming the REAL browser the whole time (no
+    pause, no competing screenshot), so the user simply watches the actual page
+    and either types an instruction or takes over the browser directly.
+
+    Loop: ask user → if "continue"/cancel break → else execute instruction →
+    save learning → repeat.
 
     Returns "cancel" | "continue" | "" (timeout/no answer)."""
     if not on_stuck:
         return ""
 
     for turn in range(max_turns):
-        # Pause the live screencast so it can't overwrite our question
-        # screenshot with a stale viewport frame while the user is reading.
-        if cast:
-            cast.pause()
-
-        # Full-page screenshot so the user can scroll and see ALL fields /
-        # errors — not just the viewport the agent happens to be on.
-        try:
-            sp = f"output/steer_{user_id}_{turn}.png"
-            try:
-                await page.screenshot(path=sp, full_page=True, timeout=8000)
-            except Exception:
-                await page.screenshot(path=sp, timeout=5000)
-            if on_screenshot:
-                await on_screenshot(sp)
-        except Exception:
-            pass
-
         prompt = question if turn == 0 else "What next? (or say 'continue' to hand back control)"
         ans = ((await on_stuck(prompt)) or "").strip()
-
-        # Resume the live screencast now that the user has answered.
-        if cast:
-            cast.resume()
 
         if not ans:
             return ""
@@ -287,12 +269,15 @@ async def run_application(
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
 
         from screencast import start_screencast, stop_screencast
-        cast = start_screencast(page, on_screenshot, user_id)
+        # Pass the CONTEXT, not a page: the screencast auto-follows the frontmost
+        # tab every tick, so it never desyncs when the agent moves to a new tab
+        # (Workday opens the form in a new tab) or navigates a multi-step flow.
+        cast = start_screencast(ctx, on_screenshot, user_id)
 
         def _track_page(new_page):
-            """Point the live screencast at whatever page is currently active."""
-            if cast and new_page is not cast.page:
-                cast.page = new_page
+            """No-op kept for call-site compatibility — the screencast now follows
+            the frontmost tab on its own, so nothing needs to be tracked."""
+            pass
 
         try:
             # Retry the first navigation on transient network/DNS errors
@@ -455,6 +440,23 @@ async def run_application(
                                     await page.wait_for_timeout(2000)
                             except Exception:
                                 pass
+                        # Silent-failure diagnostic: if we're still on the auth
+                        # page after both attempts returned True, the submit
+                        # click was silently swallowed (e.g. aria-hidden button,
+                        # overlay div). Capture HTML + screenshot, ask LLM to
+                        # diagnose, and retry with the suggested strategy.
+                        if await looks_like_auth(page):
+                            try:
+                                if on_notify:
+                                    await on_notify("🔍 Auth submit may have failed silently — diagnosing…")
+                                diag = await diagnose_click_failure(page, gemini_client)
+                                if diag:
+                                    logger.info(f"click diagnosis: {diag.get('diagnosis','?')}")
+                                    if await retry_with_diagnosis(page, diag):
+                                        await settle(page)
+                                        await page.wait_for_timeout(2000)
+                            except Exception as ex:
+                                logger.debug(f"click diagnosis skipped: {ex}")
                         if not await looks_like_auth(page):
                             if on_notify:
                                 await on_notify("🔓 Authenticated — continuing with the application.")
@@ -611,6 +613,22 @@ async def run_application(
                         if await is_submitted(page):
                             result.status = "success"
                             break
+                        # Submit click fired but page didn't actually submit —
+                        # diagnose via HTML + screenshot (same aria-hidden
+                        # pattern that blocks auth buttons can block final
+                        # submit too).
+                        try:
+                            diag = await diagnose_click_failure(page, gemini_client)
+                            if diag and await retry_with_diagnosis(page, diag):
+                                if on_notify:
+                                    await on_notify(f"🔧 Submit retry: {diag.get('diagnosis','')[:60]}")
+                                await settle(page)
+                                await page.wait_for_timeout(3000)
+                                if await is_submitted(page):
+                                    result.status = "success"
+                                    break
+                        except Exception:
+                            pass
                         continue
                     # May have landed on a gateway/job-description page mid-flow
                     # (e.g. redirect after form submission, or a multi-step portal).
