@@ -1770,89 +1770,113 @@ async def _handle_select(page, e, val, idx_frame, elements, profile, user_id,
             if committed else ("fail", f"[{idx}] {label}={target!r} (did not commit)"))
 
 
+async def _click_country_option(page, country, opt_selectors):
+    """Click the visible option whose name EXACTLY equals `country`. Substring
+    matching 'India' also hits 'British Indian Ocean Territory' (+246), so we
+    require an exact (case-insensitive) name match, ignoring a trailing dial code
+    like 'India +91'. Reads the .iti__country-name span when present else the
+    element's own text. Returns True on click."""
+    cfold = country.casefold()
+    for osel in opt_selectors:
+        try:
+            opts = page.locator(osel)
+            cnt = await opts.count()
+            if cnt == 0:
+                continue
+            for i in range(min(cnt, 300)):
+                o = opts.nth(i)
+                try:
+                    if not await o.is_visible():
+                        continue
+                    nm = o.locator(".iti__country-name")
+                    if await nm.count() > 0:
+                        name = (await nm.first.inner_text() or "").strip()
+                    else:
+                        name = (await o.inner_text() or "").strip()
+                except Exception:
+                    continue
+                nf = name.casefold()
+                if nf == cfold or nf.startswith(cfold + " ") or nf.split("+")[0].strip() == cfold:
+                    await o.scroll_into_view_if_needed(timeout=1500)
+                    await o.click(timeout=2000)
+                    await page.wait_for_timeout(400)
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 async def _fix_phone_country(page, profile, on_notify=None):
     """Deterministically set the phone-country selector to the candidate's country.
 
-    Phone widgets (intl-tel-input, react-international-phone, react-select) default
-    to a wrong country (e.g. +246) which the generic LLM fill drives unreliably,
-    tripping "phone number is too long" validation. The fix for that error is the
-    COUNTRY code, not the number — so we find the country control, open it,
-    optionally search, click the matching country, and confirm the list closed.
+    Two widget families, tried in order:
+      A. react-select COMBOBOX (Greenhouse/Jumio 'Country' box) — a text input that
+         FILTERS the 240-country list as you type. Opening it and scrolling lands on
+         a random country (Azerbaijan in testing); the reliable path is to TYPE the
+         country name to filter, then click the exact match.
+      B. intl-tel-input flag button + search box + <li> list.
 
     Returns the country name on success, else ''. Fully defensive — never throws."""
     country = str(profile.get("country") or "").strip() or "India"
-    cfold = country.casefold()
     try:
-        # Open the flag/country button. Class differs across intl-tel-input
-        # versions: v18+ uses .iti__selected-country, older uses .iti__selected-flag.
+        # ── Path A: react-select country combobox — TYPE to filter, then click ──
+        for cb in ("input#country",
+                   ".phone-input__country input.select__input",
+                   ".phone-input__country input[role='combobox']",
+                   "input[role='combobox'][aria-labelledby*='country' i]"):
+            try:
+                box = page.locator(cb).first
+                if await box.count() == 0 or not await box.is_visible():
+                    continue
+                await box.scroll_into_view_if_needed(timeout=1500)
+                await box.click(timeout=2000)
+                # Real keystrokes (not fill) so react-select's filter actually fires.
+                try:
+                    await box.fill("", timeout=1000)
+                except Exception:
+                    pass
+                await box.press_sequentially(country, delay=40)
+                await page.wait_for_timeout(600)
+                if await _click_country_option(
+                        page, country,
+                        (".select__option", "[class*='select__option']",
+                         "[role='option']", "[id*='option']")):
+                    if on_notify:
+                        await on_notify(f"☎️ Phone country set to {country}")
+                    return country
+            except Exception:
+                continue
+
+        # ── Path B: intl-tel-input flag button + search ──
         opener = None
         for s in (".iti__selected-country", ".iti__selected-flag",
-                  "[class*='country-selector'] button",     # react-international-phone
+                  "[class*='country-selector'] button",
                   "[aria-label='Select country']",
-                  "[aria-label*='phone country' i]",
-                  "[aria-label*='country code' i]"):
+                  "[aria-label*='phone country' i]", "[aria-label*='country code' i]"):
             loc = page.locator(s).first
             if await loc.count() > 0 and await loc.is_visible():
                 opener = loc
                 break
-        if opener is None:
-            return ""
-        await opener.scroll_into_view_if_needed(timeout=1500)
-        await opener.click(timeout=3000)
-        await page.wait_for_timeout(400)
-
-        # Type into the search box if present (filters the 240+ country list).
-        for ss in (".iti__search-input", "input[type='search']",
-                   "[class*='search'] input", "input[class*='search']"):
-            try:
-                si = page.locator(ss).first
-                if await si.count() > 0 and await si.is_visible():
-                    await si.fill(country, timeout=1500)
-                    await page.wait_for_timeout(400)
-                    break
-            except Exception:
-                continue
-
-        # CRITICAL: match the country name EXACTLY. Substring matching 'India'
-        # also hits 'British Indian Ocean Territory' (+246) — which sorts first,
-        # so a substring/.first pick selects the WRONG country. That is the +246
-        # bug. Iterate options and require an exact (case-insensitive) name match,
-        # reading the country-name span when present (intl-tel-input) else the
-        # element's own text.
-        for osel in ("li.iti__country", ".iti__country-list li",
-                     "[role='option']", ".country-list li",
-                     "[class*='country-selector'] li", "[class*='dropdown'] li", "li"):
-            try:
-                opts = page.locator(osel)
-                cnt = await opts.count()
-                if cnt == 0:
-                    continue
-                for i in range(min(cnt, 300)):
-                    o = opts.nth(i)
-                    try:
-                        if not await o.is_visible():
-                            continue
-                        name_loc = o.locator(".iti__country-name")
-                        if await name_loc.count() > 0:
-                            name = (await name_loc.first.inner_text() or "").strip()
-                        else:
-                            name = (await o.inner_text() or "").strip()
-                    except Exception:
-                        continue
-                    # Exact match (ignore a trailing dial code like 'India +91').
-                    nfold = name.casefold()
-                    if nfold == cfold or nfold.startswith(cfold + " ") or nfold.split("+")[0].strip() == cfold:
-                        await o.scroll_into_view_if_needed(timeout=1500)
-                        await o.click(timeout=2000)
+        if opener is not None:
+            await opener.scroll_into_view_if_needed(timeout=1500)
+            await opener.click(timeout=3000)
+            await page.wait_for_timeout(400)
+            for ss in (".iti__search-input", "input[type='search']",
+                       "[class*='search'] input"):
+                try:
+                    si = page.locator(ss).first
+                    if await si.count() > 0 and await si.is_visible():
+                        await si.fill(country, timeout=1500)
                         await page.wait_for_timeout(400)
-                        if on_notify:
-                            await on_notify(f"☎️ Phone country set to {country}")
-                        return country
-                # Found options for this selector but no exact match → stop here
-                # rather than letting a broader selector make a loose match.
-                return ""
-            except Exception:
-                continue
+                        break
+                except Exception:
+                    continue
+            if await _click_country_option(
+                    page, country,
+                    ("li.iti__country", ".iti__country-list li", "[role='option']")):
+                if on_notify:
+                    await on_notify(f"☎️ Phone country set to {country}")
+                return country
         return ""
     except Exception:
         return ""
@@ -2338,6 +2362,15 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
             fail_labels = [l for l in (_label_of_note(n) for n in b["fail"]) if l]
             if fail_labels:
                 field_repairs += 1
+                # Phone-country failures: the deterministic exact-match handler is
+                # FAR more reliable than generic LLM grounding here (the LLM
+                # mis-picks 'British Indian Ocean Territory' for 'India'). Try it
+                # first; only fall back to grounding if it didn't apply.
+                if any(("phone" in l.lower() and "country" in l.lower())
+                       or l.lower() in ("country", "phone country", "phone country dropdown")
+                       for l in fail_labels):
+                    if await _fix_phone_country(page, profile, on_notify=on_notify):
+                        continue   # set → re-run the loop (re-fill is now guarded)
                 if on_notify:
                     await on_notify(f"🔎 Looking closer at: {', '.join(fail_labels[:3])}")
                 try:

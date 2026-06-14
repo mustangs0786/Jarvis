@@ -39,6 +39,32 @@ def _creds():
     return {"email": os.getenv("APPLY_EMAIL", ""), "password": os.getenv("APPLY_PASSWORD", "")}
 
 
+# Phrases that mean "I don't actually have this value" — when the LLM returns one
+# of these as a should_be/value, it's a hallucinated placeholder, NOT real data.
+# Writing it corrupts the field (e.g. "DEEPAK's email from profile not provided"
+# was typed straight into the Email box). Never commit a value containing these.
+_INVALID_VALUE_MARKERS = (
+    "not provided", "not available", "not specified", "not given",
+    "from profile", "no value", "n/a", "unknown", "none provided",
+    "please provide", "missing", "no data", "not found", "tbd",
+    "placeholder", "your ", "candidate's", "'s email", "'s phone",
+)
+
+
+def _looks_invalid(value, field_label=""):
+    """True if an LLM-proposed value is clearly a hallucinated placeholder/sentence
+    rather than real data, so it must never be written into a field."""
+    v = str(value or "").strip().lower()
+    if not v:
+        return True
+    if any(m in v for m in _INVALID_VALUE_MARKERS):
+        return True
+    # An email field's value must look like an email.
+    if "email" in (field_label or "").lower() and "@" not in v:
+        return True
+    return False
+
+
 async def _full_marked_shot(page):
     """Scroll to top, re-scan (so boxes align with the document), number un-numbered
     rows, full-page screenshot with red boxes. Returns (elements, idx_frame, png)."""
@@ -136,6 +162,12 @@ async def correct_from_audit(page, profile, audit, *, on_notify=None):
     for idx, value, field_label in targets:
         e = by_idx.get(idx)
         if e is None or not value or classify_field(e) == "skip":
+            continue
+        # Never write a hallucinated placeholder value (the "DEEPAK's email from
+        # profile not provided" bug). If the LLM couldn't produce a real value,
+        # leave the field for deterministic resolution / the user.
+        if _looks_invalid(value, field_label or e.get("label", "")):
+            print(f"  vision skip: [{idx}] {str(value)[:40]!r} looks like a placeholder, not a value")
             continue
         # SAFETY: the element at this index must match the label the audit named.
         # If it doesn't, the indices have drifted — skip rather than write the
