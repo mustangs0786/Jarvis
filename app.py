@@ -380,7 +380,8 @@ _DEMO_HTML = """<!doctype html>
   #log{font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-height:600px;overflow:auto}
   #log .l{padding:3px 0;border-bottom:1px solid #1b2540;white-space:pre-wrap;word-break:break-word}
   #log .info{color:var(--ink)} #log .sys{color:var(--mut)} #log .err{color:var(--err)} #log .ok{color:var(--acc2)}
-  #shotWrap{display:none} #shot{width:100%;border-radius:10px;border:1px solid var(--line);display:block}
+  #shotWrap{display:none;max-height:70vh;overflow-y:auto;border-radius:10px;border:1px solid var(--line)}
+  #shot{width:100%;display:block}
   #liveBadge{display:none;color:#2ecc71;font-weight:600;font-size:12px;margin-left:8px;animation:pulse 1.5s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
   .empty{color:var(--mut);font-size:14px}
@@ -512,11 +513,12 @@ _DEMO_HTML = """<!doctype html>
     es.onmessage=function(e){ var d; try{d=JSON.parse(e.data)}catch(_){return} handle(d); };
     es.onerror=function(){ if(!done) log('Stream closed.','sys'); stop(); };
   }
+  var questionActive=false;
   function handle(d){
     var s=d.step;
-    if(s==='shot'){ showShot(d.url); return; }
+    if(s==='shot'){ if(!questionActive) showShot(d.url); return; }
     if(s==='tailor'){ tailorCard(d); return; }
-    if(s==='question'){ ask(d.msg, d.shot); return; }
+    if(s==='question'){ questionActive=true; ask(d.msg, d.shot); return; }
     if(s==='applied'){ done=true; if(d.status==='success') setStage(5); result(d); stop(); return; }
     if(s==='error'||s==='no_profile'||s==='apply_unavailable'){ done=true; log('⚠ '+(d.msg||'Error'),'err'); stop(); return; }
     if(d.msg){
@@ -552,7 +554,7 @@ _DEMO_HTML = """<!doctype html>
   function sendAnswer(a){
     fetch('/api/apply-answer',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session_id:sid,answer:a})});
-    log('You: '+a,'ok'); $('ask').style.display='none';
+    log('You: '+a,'ok'); $('ask').style.display='none'; questionActive=false;
   }
   function result(d){
     var ok = d.status==='success';

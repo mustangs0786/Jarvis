@@ -45,399 +45,6 @@ from apply_llm import llm_json
 # the safe, human-in-the-loop behavior (notebooks, attended runs) is unchanged.
 AUTO_ANSWER = False
 
-import json as _json
-import logging
-
-_log = logging.getLogger(__name__)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# v2 HTML-to-LLM form filler — modeled on linkedin_easy_apply.analyze_modal
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_FORM_FILL_PROMPT = """You are a browser automation agent filling a job application form.
-
-You will receive:
-1. The HTML of the form on the current page
-2. The applicant's profile JSON (source of truth for all values)
-3. The applicant's resume text (fallback if profile is missing a value)
-
-Return a JSON array of browser actions to fill EVERY field on this form.
-
-Each action must have:
-- "action": one of: fill, click, click_option, upload, press_sequentially, press_key, scroll_into_view, hover, clear_and_fill, select_native, wait
-- "selector": CSS selector to find the element (prefer [name='x'] > [id='x'] > [aria-label='x'] > [data-automation-id='x'] > label text)
-- "value": value to use (string), or null if not needed
-- "label": human-readable field name (for logging)
-
-Action meanings:
-- fill              -> el.fill(value)  — for text/email/tel/number/textarea inputs
-- click             -> el.click()      — for buttons, labels, radio options, checkboxes
-- click_option      -> open a dropdown then click the matching option text (for custom combobox/listbox/react-select components); set value = option text
-- select_native     -> el.select_option(label=value)  — ONLY for native <select> tags
-- upload            -> set_input_files(value) — for file inputs; set value = "__RESUME__"
-- press_sequentially -> type char by char — for autocomplete/typeahead inputs
-- press_key         -> el.press(value) — e.g. "Enter", "Tab", "Escape"
-- scroll_into_view  -> scroll element into view
-- hover             -> hover over element
-- clear_and_fill    -> clear then fill — for pre-populated inputs that need overwriting
-- wait              -> wait N ms; value = "500"
-
-Rules:
-- Read the HTML carefully. Identify EVERY input, select, textarea, radio, checkbox that needs filling.
-- For native <select> tags: use select_native (NOT click_option). Read the <option> values from the HTML.
-- For custom dropdowns (role=combobox, role=listbox, class contains 'select'): use click_option.
-- For radio groups: click the <label> or the radio <input> for the correct option.
-- For checkboxes labeled with consent/terms/agreement/privacy/acknowledge: click to check them.
-- For file inputs (input[type='file']): return upload with value = "__RESUME__". Never skip file inputs.
-- For date fields: fill with the format matching the placeholder or the label hint (MM/YYYY, MM/DD/YYYY, etc.).
-- For "how did you hear about us" / source / referral: pick "Company Website", "Career Site", "Job Board", or "LinkedIn" if available, else "Other".
-- For EEO/ethnicity/race/veteran/disability questions: pick "Decline to self-identify" or "Prefer not to answer" if available.
-- For yes/no questions about visa/sponsorship/work authorization: candidate is Indian citizen in India, answer "No" for sponsorship needed.
-- For numeric experience fields: use whole numbers, round from profile (5.7 -> 6). Never return null.
-- For notice period / "how soon can you join": convert from profile (e.g. "30 days" -> 30, "2 months" -> 60, "immediate" -> 0). Default to 30 if missing.
-- Values MUST come from the profile or resume. NEVER invent unrelated values.
-- For fields where the profile has no data AND you cannot reasonably derive an answer: set value = null.
-- SKIP these — do NOT click or interact with them:
-  * Navigation buttons: Next, Submit, Save, Continue, Back, Cancel
-  * OAuth / SSO buttons: "Apply With LinkedIn", "Sign in with LinkedIn", "Sign in with Google", "Login with SSO", any social login button
-  * Application method choosers: "Autofill with Resume", "Use My Last Application", "Apply Manually", "Upload Resume"
-  * Header/footer links, sign-out, search bars, chat widgets, Follow Us, privacy policy links
-- If the page has NO fillable form fields (only buttons like "Apply Manually", "Apply With LinkedIn"), return an EMPTY array [].
-- Return ONLY a valid JSON array, no markdown, no explanation.
-
-=== PROFILE JSON ===
-{profile}
-
-=== RESUME TEXT ===
-{resume_text}
-
-=== FORM HTML ===
-{form_html}
-"""
-
-
-def _compact_html(html: str, max_chars: int = 60_000) -> str:
-    """Strip SVG/style/script/comments and collapse whitespace."""
-    html = re.sub(r"<(svg|style|script)\b.*?</\1>", "", html, flags=re.S | re.I)
-    html = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-    html = re.sub(r"[ \t]+", " ", html)
-    html = re.sub(r"\n\s*\n+", "\n", html)
-    return html[:max_chars]
-
-
-async def _get_form_html(page, max_chars: int = 60_000) -> str:
-    """Find the best form container on the page and return compacted HTML.
-    Tries <form>, <main>, [role='main'], then falls back to <body>."""
-    for sel in ("form", "main", "[role='main']", "#content", ".content"):
-        try:
-            loc = page.locator(sel).first
-            if await loc.count() > 0 and await loc.is_visible():
-                html = await loc.inner_html()
-                if len(html) > 300:
-                    print(f"  v2: scoped to <{sel}> ({len(html)} chars raw)")
-                    return _compact_html(html, max_chars)
-        except Exception:
-            continue
-    try:
-        html = await page.inner_html("body")
-        print(f"  v2: fell back to <body> ({len(html)} chars raw)")
-        return _compact_html(html, max_chars)
-    except Exception:
-        return ""
-
-
-async def _analyze_form(page, profile: dict, gemini_client=None) -> list:
-    """Send compacted form HTML + profile to the LLM. Returns list of actions."""
-    form_html = await _get_form_html(page)
-    if not form_html or len(form_html) < 50:
-        print("  v2: form HTML too short, skipping")
-        return []
-
-    safe_profile = {k: v for k, v in profile.items()
-                    if k not in ("password", "_resolved", "_dropdown_resolved",
-                                 "_llm_resolved") and v}
-    resume_text = str(profile.get("_resume_text", ""))[:5000]
-
-    prompt = _FORM_FILL_PROMPT.format(
-        profile=_json.dumps(safe_profile, indent=2, ensure_ascii=False),
-        resume_text=resume_text or "(no resume text available)",
-        form_html=form_html,
-    )
-
-    try:
-        data = llm_json(
-            prompt + '\n\nIf you must return a JSON object, wrap the array as {"actions": [...]}.',
-            gemini_client=gemini_client, gemini_model=FLASH_MODEL,
-        )
-        if isinstance(data, dict):
-            data = data.get("actions") or next(
-                (v for v in data.values() if isinstance(v, list)), [])
-        if isinstance(data, list):
-            print(f"  v2: LLM planned {len(data)} actions")
-            return data
-    except Exception as e:
-        print(f"  v2: form analysis failed: {e}")
-    return []
-
-
-async def _dismiss_autocomplete(page, value: str):
-    """If a listbox/dropdown appeared after typing, click the best match.
-    Lightweight — no LLM, no screenshot. Just DOM pattern matching."""
-    try:
-        listbox = page.locator("[role='listbox']:visible, [role='menu']:visible, "
-                               "ul.suggestions:visible, .autocomplete-results:visible").first
-        if await listbox.count() == 0:
-            return
-        opts = listbox.locator("[role='option'], li")
-        count = await opts.count()
-        if count == 0:
-            return
-        val_lower = value.lower()
-        for i in range(min(count, 15)):
-            try:
-                text = ((await opts.nth(i).inner_text()) or "").strip()
-                if text and (val_lower in text.lower() or text.lower() in val_lower):
-                    await opts.nth(i).click()
-                    print(f"    v2 autocomplete: clicked '{text[:40]}'")
-                    await page.wait_for_timeout(300)
-                    return
-            except Exception:
-                continue
-        # No match — press Escape to close the dropdown
-        await page.keyboard.press("Escape")
-        await page.wait_for_timeout(200)
-    except Exception:
-        pass
-
-
-async def _form_dispatch(page, action: dict, resume_path: str) -> str:
-    """Execute one CSS-selector-based action. Returns 'filled'|'skipped'|'failed'.
-
-    Ported from linkedin_easy_apply._dispatch_action — handles the same action
-    types but scoped to the full page (no modal wrapper)."""
-    act = (action.get("action") or "").strip().lower()
-    selector = (action.get("selector") or "").strip()
-    value = action.get("value")
-    label = action.get("label") or selector or act
-
-    if not act:
-        return "skipped"
-
-    # wait — no element needed
-    if act == "wait":
-        try:
-            ms = int(re.sub(r"[^0-9]", "", str(value or "")) or 500)
-        except Exception:
-            ms = 500
-        await page.wait_for_timeout(min(ms, 10_000))
-        return "skipped"
-
-    if not selector:
-        print(f"    v2 skip (no selector): [{label}]")
-        return "skipped"
-
-    # Resolve element
-    el = None
-    try:
-        candidate = page.locator(selector).first
-        if await candidate.count() > 0:
-            el = candidate
-    except Exception:
-        pass
-
-    if el is None:
-        print(f"    v2 miss: {selector} [{label}]")
-        return "failed"
-
-    needs_value = act in ("fill", "click_option", "select_native", "upload",
-                          "press_sequentially", "clear_and_fill")
-    if needs_value and (value is None or str(value).strip() == ""):
-        print(f"    v2 skip (null value): [{label}]")
-        return "skipped"
-
-    try:
-        if act == "scroll_into_view":
-            await el.scroll_into_view_if_needed()
-            return "skipped"
-
-        elif act == "hover":
-            await el.hover()
-            return "skipped"
-
-        elif act == "press_key":
-            await el.press(str(value))
-            return "filled"
-
-        elif act == "upload":
-            path = resume_path
-            if path and os.path.exists(path):
-                await el.set_input_files(path)
-                print(f"    v2 uploaded: {os.path.basename(path)} [{label}]")
-                await page.wait_for_timeout(800)
-                return "filled"
-            else:
-                print(f"    v2 skip: no resume file for [{label}]")
-                return "skipped"
-
-        elif act == "fill":
-            await el.scroll_into_view_if_needed()
-            await el.fill(str(value))
-            print(f"    v2 filled: {label} = {str(value)[:40]}")
-            await page.wait_for_timeout(400)
-            await _dismiss_autocomplete(page, str(value))
-            return "filled"
-
-        elif act == "clear_and_fill":
-            await el.scroll_into_view_if_needed()
-            await el.click(click_count=3)
-            await el.press("Control+a")
-            await el.press("Backspace")
-            await el.fill(str(value))
-            print(f"    v2 clear+fill: {label} = {str(value)[:40]}")
-            await page.wait_for_timeout(400)
-            return "filled"
-
-        elif act == "press_sequentially":
-            await el.scroll_into_view_if_needed()
-            await el.click(click_count=3)
-            await el.press_sequentially(str(value), delay=60)
-            print(f"    v2 typed: {label} = {str(value)[:40]}")
-            await page.wait_for_timeout(600)
-            await _dismiss_autocomplete(page, str(value))
-            return "filled"
-
-        elif act == "click":
-            await el.scroll_into_view_if_needed()
-            await el.click()
-            print(f"    v2 clicked: {label}")
-            await page.wait_for_timeout(300)
-            return "filled"
-
-        elif act == "select_native":
-            await el.select_option(label=str(value), timeout=5000)
-            print(f"    v2 native select: {label} = {str(value)[:40]}")
-            await page.wait_for_timeout(300)
-            return "filled"
-
-        elif act == "click_option":
-            await el.scroll_into_view_if_needed()
-            # Check if it's a native <select> first
-            try:
-                tag = (await el.evaluate("e => e.tagName")).lower()
-            except Exception:
-                tag = ""
-            if tag == "select":
-                try:
-                    await el.select_option(label=str(value), timeout=5000)
-                    print(f"    v2 select (native): {label} = {str(value)[:40]}")
-                    return "filled"
-                except Exception:
-                    pass
-
-            # Custom dropdown: click to open, find matching option
-            await el.click()
-            await page.wait_for_timeout(600)
-
-            option_found = False
-            val_lower = str(value).lower()
-            val_escaped = str(value).replace('"', '\\"')
-            for list_sel in [
-                f'[role="option"]:has-text("{val_escaped}")',
-                f'li:has-text("{val_escaped}")',
-                "[role='listbox'] [role='option']",
-                "ul[role='listbox'] li",
-                "[data-automation-id='promptOption']",
-                ".select__option",
-            ]:
-                try:
-                    opts = page.locator(list_sel)
-                    count = await opts.count()
-                    if count == 0:
-                        continue
-                    for i in range(min(count, 25)):
-                        opt_text = ((await opts.nth(i).inner_text()) or "").strip()
-                        if not opt_text:
-                            continue
-                        if (val_lower in opt_text.lower()
-                                or opt_text.lower() in val_lower):
-                            await opts.nth(i).click()
-                            print(f"    v2 click_option: {label} = {opt_text[:40]}")
-                            option_found = True
-                            await page.wait_for_timeout(400)
-                            break
-                    if option_found:
-                        break
-                except Exception:
-                    continue
-
-            if not option_found:
-                # Fallback: type into the field and press Enter (typeahead)
-                try:
-                    await el.fill(str(value))
-                    await page.wait_for_timeout(500)
-                    await page.keyboard.press("Enter")
-                    await page.wait_for_timeout(400)
-                    print(f"    v2 click_option fallback (type+enter): {label} = {str(value)[:40]}")
-                    return "filled"
-                except Exception:
-                    print(f"    v2 click_option: no match for '{value}' [{label}]")
-                    return "failed"
-            return "filled"
-
-        else:
-            print(f"    v2 unknown action '{act}' [{label}]")
-            return "skipped"
-
-    except Exception as e:
-        print(f"    v2 error [{act}|{label}]: {e}")
-        return "failed"
-
-
-async def _fill_pass_v2(page, profile, user_id, creds, resume_path,
-                        upload_state, gemini_client, held_list, fill_memo=None):
-    """v2 fill pass: HTML -> LLM -> CSS-selector actions -> dispatch.
-    Returns the same bucket dict as _fill_pass for backward compatibility."""
-    # Quick check: if the page has very few form inputs, it's probably a
-    # gateway/choice page (e.g. "Apply Manually" / "Apply With LinkedIn"),
-    # not a real form. Skip v2 so the orchestrator handles it normally.
-    try:
-        n_inputs = await page.evaluate(
-            "document.querySelectorAll('input:not([type=hidden]),select,textarea').length")
-        if n_inputs < 2:
-            print(f"  v2: only {n_inputs} inputs on page — likely a gateway, skipping")
-            return None
-    except Exception:
-        pass
-
-    buckets = {"filled": [], "nodata": [], "fail": [], "held": []}
-
-    actions = await _analyze_form(page, profile, gemini_client)
-    if not actions:
-        print("  v2: no actions from LLM — falling back to v1")
-        return None  # signal caller to fall back to v1
-
-    for action in actions:
-        label = action.get("label") or action.get("selector") or "?"
-        result = await _form_dispatch(page, action, resume_path)
-
-        if result == "filled":
-            buckets["filled"].append(label)
-            if action.get("action") == "upload":
-                upload_state["done"] = True
-        elif result == "failed":
-            buckets["fail"].append(label)
-
-        await page.wait_for_timeout(120)
-
-    return buckets
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# End of v2 HTML-to-LLM fill — everything below is v1 (kept for error
-# correction, grounded repair, phantom rows, and as fallback)
-# ═══════════════════════════════════════════════════════════════════════════════
-
 
 # ── small helpers ────────────────────────────────────────────────────────────
 _SEC_LIST = {"work experience": "experience", "employment": "experience",
@@ -1340,20 +947,11 @@ _GATEWAY_TEXTS = ["Apply Manually", "Apply manually", "Start Application",
 _GATEWAY_BAD = ("autofill", "linkedin", "last application", "resume")
 
 async def advance(page):
-    """Forward-button ladder: auth -> NEXT -> submit-guard -> text fallback."""
-    # Auth-step buttons first: on Workday's Create Account / Sign In page the
-    # page-footer "Save and Continue" button exists but is inert until the
-    # account is created.  Checking auth buttons first ensures we click the
-    # functional submit (createAccountSubmitButton / signInSubmitButton).
-    abt = page.locator("[data-automation-id='signInSubmitButton'], "
-                       "[data-automation-id='createAccountSubmitButton']")
+    """Forward-button ladder: NEXT -> submit-guard -> auth -> gateway."""
     nbt = page.locator(WORKDAY_NEXT_BUTTON)
     sbt = page.locator(WORKDAY_SUBMIT_BUTTON)
-    if await abt.count() > 0 and await abt.first.is_visible():
-        try:
-            await abt.first.click(timeout=5000, force=True); return True, "AUTH submit"
-        except Exception as ex:
-            return False, f"AUTH err {ex}"
+    abt = page.locator("[data-automation-id='signInSubmitButton'], "
+                       "[data-automation-id='createAccountSubmitButton']")
     if await nbt.count() > 0 and await nbt.first.is_visible():
         try:
             await nbt.first.click(timeout=5000, force=True); return True, "WORKDAY_NEXT"
@@ -1361,6 +959,11 @@ async def advance(page):
             return False, f"NEXT err {ex}"
     if await sbt.count() > 0 and await sbt.first.is_visible():
         return False, "SUBMIT visible — final review, NOT auto-clicking"
+    if await abt.count() > 0 and await abt.first.is_visible():
+        try:
+            await abt.first.click(timeout=5000, force=True); return True, "AUTH submit"
+        except Exception as ex:
+            return False, f"AUTH err {ex}"
     # NOTE: we deliberately do NOT click gateway buttons ("Apply", "Apply Now",
     # "Apply Manually") here. On a form page a stray "Apply" link would re-navigate
     # and loop. Gateway click-through (landing → application) is handled ONCE,
@@ -2112,12 +1715,9 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
         while await _delete_phantom_rows(page, profile):
             print("  deleted a phantom row")
 
-        # 1) fill — v2 (HTML -> LLM -> CSS selectors), with v1 fallback
-        b = await _fill_pass_v2(page, profile, user_id, creds, resume_path,
-                                upload_state, gemini_client, held_list, fill_memo)
-        if b is None:
-            b = await _fill_pass(page, profile, user_id, creds, resume_path,
-                                 upload_state, gemini_client, held_list, fill_memo)
+        # 1) deterministic fill
+        b = await _fill_pass(page, profile, user_id, creds, resume_path,
+                             upload_state, gemini_client, held_list, fill_memo)
         print(f"  filled {len(b['filled'])}; {len(b['nodata'])} no-data; "
               f"{len(b['fail'])} fail; {len(b['held'])} held")
         for n in b["filled"]: print(f"    OK   {n}")
@@ -2221,10 +1821,7 @@ DEFINITIONS
 - form  = a page with fields to fill.   - login = sign-in / create-account page.
 - other = none of the above.
 Set advance.index ONLY for a gateway page; otherwise advance.index = null.
-NEVER pick Sign Out, header nav, footer, language, social, cookie, or OAuth buttons.
-"Apply With LinkedIn", "Sign in with Google", or any social-login / OAuth button is NOT
-a valid gateway advance — those redirect to third-party auth flows, not the application form.
-Prefer "Apply Manually", "Apply Now", or "Start Application" over any OAuth option.
+NEVER pick Sign Out, header nav, footer, language, social, or cookie buttons.
 Return ONLY the JSON object."""
 
 
@@ -2287,8 +1884,7 @@ async def gateway_advance(page, ctx, gemini_client=None, *, on_notify=None, max_
         # — undo immediately; these pages are never the application.
         u = page.url.lower()
         if page.url != before and any(k in u for k in
-                ("arbitration", "privacy", "terms", "cookie", "policy",
-                 "user-agreement", "linkedin.com/legal", "linkedin.com/uas")):
+                ("arbitration", "privacy", "terms", "cookie", "policy")):
             print(f"  gateway landed on legal page {page.url[:60]} — going back")
             try:
                 await page.go_back(wait_until="domcontentloaded", timeout=8000)

@@ -1064,7 +1064,7 @@ function ensureApplyView(res){
     res.innerHTML=`<div class="tsm tf" style="margin-bottom:6px">Live progress — the agent fills the application page-by-page until it submits:</div>
       <div id="ap-log" style="max-height:210px;overflow:auto;border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin-bottom:8px;line-height:1.5"></div>
       <div class="tsm tf" style="margin-bottom:6px">Agent's browser: <span id="ap-live" style="display:none;color:#2ecc71;font-weight:600;animation:pulse 1.5s infinite">&#9679; LIVE</span></div>
-      <img id="ap-shot" style="width:100%;border:1px solid var(--bd);border-radius:8px;display:block" alt="agent view"/>
+      <div id="ap-shotWrap" style="max-height:70vh;overflow-y:auto;border:1px solid var(--bd);border-radius:8px"><img id="ap-shot" style="width:100%;display:block" alt="agent view"/></div>
       <div id="ap-qa" class="mt2"></div>`;
     renderApplyLog();
   }
@@ -1106,6 +1106,7 @@ async function submitApplyAnswer(){
     await fetch('/api/apply-answer',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({session_id:SID,answer:ans})});
   }catch(e){}
+  window._applyQuestionActive=false;
   document.getElementById('ap-pl').innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Sent — agent continuing...</span></div>`;
   document.getElementById('ap-res').classList.add('hidden');
 }
@@ -1120,11 +1121,12 @@ function handleApplyEv(d,pl,res) {
     ensureApplyView(res); pushApplyLog(d.msg); return;
   }
   if(d.step==='shot'){
-    if(d.url){ ensureApplyView(res); document.getElementById('ap-shot').src=d.url+'?t='+Date.now();
+    if(d.url && !window._applyQuestionActive){ ensureApplyView(res); document.getElementById('ap-shot').src=d.url+'?t='+Date.now();
       const lv=document.getElementById('ap-live'); if(lv) lv.style.display='inline'; }
     return;
   }
   if(d.step==='question'){
+    window._applyQuestionActive=true;
     pl.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Agent needs your input</span></div>`;
     ensureApplyView(res);
     if(d.shot) document.getElementById('ap-shot').src=d.shot+'?t='+Date.now();

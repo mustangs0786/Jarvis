@@ -190,9 +190,7 @@ RULES
 - Refer to the field by its red index number. Return ONLY the JSON object."""
 
 _FORBIDDEN_CLICK = ("submit", "sign out", "log out", "logout", "create account",
-                    "delete account", "delete", "sign off",
-                    "linkedin", "apply with linkedin", "sign in with linkedin",
-                    "google", "facebook", "apple", "microsoft", "okta")
+                    "delete account", "delete", "sign off")
 
 
 async def vision_recover(page, profile, errors, gemini_client=None, *, on_notify=None, max_tries=2):
@@ -262,85 +260,3 @@ async def vision_recover(page, profile, errors, gemini_client=None, *, on_notify
         except Exception:
             break
     return taken
-
-
-# ── User-guided action: execute a free-text instruction on the current page ──
-
-_GUIDE_PROMPT = """The user is guiding a browser automation agent through a job-application page.
-Red numbered boxes mark interactive elements (the number is each element's index).
-
-USER INSTRUCTION: {instruction}
-
-ELEMENTS ON PAGE:
-{elements}
-
-Execute the user's instruction. Return STRICT JSON:
-{{"index": <int>, "action": "<fill|select|check|click>", "value": "<value or empty>", "reason": "<short>"}}
-
-RULES
-- Map the user's instruction to the BEST matching element by its label/text.
-- "click on create account" → find the Create Account button index, action=click.
-- "fill email with X" → find the email field index, action=fill, value=X.
-- If you cannot identify the element, return {{"index": null, "reason": "cannot find element"}}.
-- NEVER click Sign Out / Log Out / Delete Account.
-- Return ONLY the JSON object."""
-
-
-_NAV_BACK = ("go back", "previous page", "navigate back", "back to previous", "go to previous")
-_NAV_REFRESH = ("refresh", "reload")
-
-
-async def execute_user_instruction(page, instruction, gemini_client=None, *, on_notify=None):
-    """Take a screenshot, send it + the user's free-text instruction to the LLM,
-    execute the resulting action. Returns True if an action was taken."""
-    if not instruction or len(instruction.strip()) < 3:
-        return False
-    low = instruction.strip().lower()
-    if any(k in low for k in _NAV_BACK):
-        try:
-            await page.go_back(timeout=8000)
-            await settle(page)
-            if on_notify:
-                await on_notify("👤 User guided: navigated back")
-            return True
-        except Exception:
-            return False
-    if any(k in low for k in _NAV_REFRESH):
-        try:
-            await page.reload(timeout=8000)
-            await settle(page)
-            if on_notify:
-                await on_notify("👤 User guided: page refreshed")
-            return True
-        except Exception:
-            return False
-    creds = _creds()
-    elems, idx_fr, marked = await _full_marked_shot(page)
-    try:
-        out = llm_json(
-            _GUIDE_PROMPT.format(instruction=instruction,
-                                 elements=elements_to_text(elems)),
-            image_b64=base64.b64encode(marked).decode(),
-            gemini_client=gemini_client, gemini_model=FLASH_MODEL) or {}
-    except Exception:
-        return False
-    idx = out.get("index")
-    if idx is None:
-        return False
-    action = (out.get("action") or "click").lower()
-    value = out.get("value") or ""
-    e = next((x for x in elems if x.get("idx") == idx), {})
-    lab = (e.get("label") or "").lower()
-    # Safety: never sign out or delete
-    if action == "click" and any(f in lab for f in ("sign out", "log out", "logout", "delete")):
-        return False
-    try:
-        ok, note = await execute_action(page, {"action": action, "index": idx,
-                                                "value": value, "label": e.get("label", "")},
-                                        idx_fr, elems, "", creds)
-        if on_notify:
-            await on_notify(f"👤 User guided: {note}")
-        await settle(page)
-        return bool(ok)
-    except Exception:
-        return False

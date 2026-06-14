@@ -33,10 +33,10 @@ from dotenv import load_dotenv
 
 from auto_agent import (settle, dismiss_overlays, clear_blocking_overlays,
                         switch_if_new_tab, looks_like_auth, try_auto_login,
-                        try_create_account, push_shot, PROFILE_DIR, MAX_ITERS)
+                        push_shot, PROFILE_DIR, MAX_ITERS)
 import apply_engine
 from apply_engine import converge_page, gateway_advance, reveal_rows, resolve_field
-from apply_vision import vision_audit, correct_from_audit, vision_recover, execute_user_instruction
+from apply_vision import vision_audit, correct_from_audit, vision_recover
 from external_apply import ExternalApplyResult, is_submitted
 from workday import (WORKDAY_SUBMIT_BUTTON, is_workday_page,
                      workday_prefill, workday_fill_dropdowns)
@@ -49,99 +49,6 @@ logger = logging.getLogger(__name__)
 
 _CANCEL_WORDS = ("cancel", "stop", "quit", "abort")
 _DONE_WORDS   = ("submit", "yes", "y", "ok", "send", "proceed", "go", "done", "continue")
-
-
-async def _steer(page, question, user_id, profile, gemini_client, *,
-                 on_stuck, on_notify=None, on_screenshot=None,
-                 cast=None, max_turns=10):
-    """Multi-turn human-in-the-loop steering.
-
-    Loop: pause screencast → push full-page screenshot → ask user →
-    resume screencast → if "continue"/cancel break →
-    else execute instruction → save learning → repeat.
-
-    Returns "cancel" | "continue" | "" (timeout/no answer)."""
-    if not on_stuck:
-        return ""
-
-    for turn in range(max_turns):
-        # Pause the live screencast so it can't overwrite our question
-        # screenshot with a stale viewport frame while the user is reading.
-        if cast:
-            cast.pause()
-
-        # Full-page screenshot so the user can scroll and see ALL fields /
-        # errors — not just the viewport the agent happens to be on.
-        try:
-            sp = f"output/steer_{user_id}_{turn}.png"
-            try:
-                await page.screenshot(path=sp, full_page=True, timeout=8000)
-            except Exception:
-                await page.screenshot(path=sp, timeout=5000)
-            if on_screenshot:
-                await on_screenshot(sp)
-        except Exception:
-            pass
-
-        prompt = question if turn == 0 else "What next? (or say 'continue' to hand back control)"
-        ans = ((await on_stuck(prompt)) or "").strip()
-
-        # Resume the live screencast now that the user has answered.
-        if cast:
-            cast.resume()
-
-        if not ans:
-            return ""
-        if ans.lower() in _CANCEL_WORDS:
-            return "cancel"
-        if ans.lower() in _DONE_WORDS:
-            return "continue"
-
-        # Execute the user's instruction
-        ok = await execute_user_instruction(page, ans, gemini_client,
-                                            on_notify=on_notify)
-
-        # Save what the user taught us
-        if ok:
-            _save_learning(profile, user_id, page.url, ans)
-
-    return "continue"
-
-
-def _save_learning(profile, user_id, url, instruction):
-    """Save a user steering action as a structured learning entry.
-
-    Field-value instructions ("select India", "pick 3-5 years") are best
-    handled by the existing _resolved cache at fill time. What we save here
-    are the RAW instructions with page context so we can:
-    1. Show them to the LLM as hints when stuck on a similar page later.
-    2. Build a log the user can review.
-
-    Stored in profile["_user_actions"] — a list of {url_pattern, instruction, ts}.
-    Kept short (last 50) so it doesn't bloat the profile."""
-    from urllib.parse import urlparse
-    from datetime import datetime
-
-    actions = profile.setdefault("_user_actions", [])
-    try:
-        host = urlparse(url).netloc.lower()
-    except Exception:
-        host = ""
-
-    actions.append({
-        "host": host,
-        "instruction": instruction.strip()[:200],
-        "ts": datetime.now().isoformat(timespec="seconds"),
-    })
-
-    # Keep only the last 50
-    if len(actions) > 50:
-        profile["_user_actions"] = actions[-50:]
-
-    try:
-        save_profile(user_id, profile)
-    except Exception:
-        pass
 
 
 async def _click_submit(page) -> bool:
@@ -289,11 +196,6 @@ async def run_application(
         from screencast import start_screencast, stop_screencast
         cast = start_screencast(page, on_screenshot, user_id)
 
-        def _track_page(new_page):
-            """Point the live screencast at whatever page is currently active."""
-            if cast and new_page is not cast.page:
-                cast.page = new_page
-
         try:
             # Retry the first navigation on transient network/DNS errors
             # (ERR_NAME_NOT_RESOLVED, ERR_CONNECTION_RESET, timeouts) — a single
@@ -429,49 +331,28 @@ async def run_application(
                         result.error = "Blocked by CAPTCHA (anti-bot)."
                         break
 
-                # ── auth wall ──
-                # Registration forms (≥2 password fields = password + verify):
-                # try create-account first.  Sign-in forms: try login first.
-                # This eliminates the wasted login → fail → navigate-back cycle
-                # on portals (Workday) that show the registration form directly.
+                # ── auth wall: try .env auto-login once, else hand off to user ──
                 if await looks_like_auth(page):
                     if not auto_login_tried:
                         auto_login_tried = True
-                        _is_reg = False
                         try:
-                            _is_reg = (
-                                await page.locator("[data-automation-id='verifyPassword']:visible").count() > 0
-                                or await page.locator("input[type='password']:visible").count() >= 2)
+                            if await try_auto_login(page, creds, on_notify):
+                                await settle(page); await page.wait_for_timeout(1500)
+                                if not await looks_like_auth(page):
+                                    if on_notify:
+                                        await on_notify("🔓 Logged in with saved credentials.")
+                                    continue
                         except Exception:
                             pass
-                        _attempts = ([try_create_account, try_auto_login] if _is_reg
-                                     else [try_auto_login, try_create_account])
-                        for _fn in _attempts:
-                            if not await looks_like_auth(page):
-                                break
-                            try:
-                                if await _fn(page, creds, on_notify):
-                                    await settle(page)
-                                    await page.wait_for_timeout(2000)
-                            except Exception:
-                                pass
-                        if not await looks_like_auth(page):
-                            if on_notify:
-                                await on_notify("🔓 Authenticated — continuing with the application.")
-                            continue
                     auth_prompts += 1
                     if auth_prompts > 3:
                         result.status = "failed"
                         result.error = "Login not completed."
                         break
-                    ret = await _steer(page, "I need help with login — guide me or log in "
-                                       "in the browser and say 'continue'.",
-                                       user_id, profile, gemini_client,
-                                       on_stuck=on_stuck, on_notify=on_notify,
-                                       on_screenshot=on_screenshot, cast=cast)
-                    if ret == "cancel":
-                        result.status = "cancelled"
-                        break
+                    await push_shot(page, user_id, it, on_screenshot, "_login")
+                    if on_stuck:
+                        await on_stuck("Please log in / create your account in the browser window, "
+                                       "then reply 'done'.")
                     await settle(page)
                     continue
 
@@ -503,22 +384,13 @@ async def run_application(
                 # Only early on — once we're filling a form, re-running this just
                 # burns an LLM call (and must never re-click "Apply" mid-form).
                 if it <= 2:
-                    _before_gw = page.url
                     page = await gateway_advance(page, ctx, gemini_client, on_notify=on_notify)
-                    _track_page(page)
                     if await is_submitted(page):
                         result.status = "success"
                         break
-                    # Gateway may have landed on an auth page or a different
-                    # form step — restart the loop so all checks (auth, captcha,
-                    # submitted) re-run on the NEW page instead of falling
-                    # through to converge_page on an un-classified page.
-                    if page.url != _before_gw:
-                        continue
 
                 # ── reveal multi-row sections to match the profile ──
                 page = await reveal_rows(page, ctx, profile, gemini_client, on_notify=on_notify) or page
-                _track_page(page)
 
                 # ── Workday: deterministic fill of the STANDARD fields by their
                 # stable data-automation-id (legalName first/last, city, phone,
@@ -545,7 +417,6 @@ async def run_application(
                                           gemini_client=gemini_client, max_attempts=4, creds=creds,
                                           on_notify=on_notify, on_screenshot=on_screenshot)
                 page = res.get("page", page)
-                _track_page(page)
                 _collect_filled(res)
                 # SPA flows (HPE/Phenom iframes) advance steps WITHOUT a URL
                 # change — filling NEW fields is progress. Re-filling the SAME
@@ -568,7 +439,6 @@ async def run_application(
                                                       gemini_client=gemini_client, max_attempts=2, creds=creds,
                                                       on_notify=on_notify, on_screenshot=on_screenshot)
                             page = res.get("page", page)
-                            _track_page(page)
                             _collect_filled(res)
                 except Exception as ex:
                     logger.debug(f"vision audit skipped: {ex}")
@@ -606,7 +476,6 @@ async def run_application(
                             await on_notify("🚀 Submitting application…")
                         await page.wait_for_timeout(4000)
                         page = await switch_if_new_tab(ctx, page)
-                        _track_page(page)
                         await settle(page)
                         if await is_submitted(page):
                             result.status = "success"
@@ -616,18 +485,14 @@ async def run_application(
                     # (e.g. redirect after form submission, or a multi-step portal).
                     before = page.url
                     page = await gateway_advance(page, ctx, gemini_client, on_notify=on_notify)
-                    _track_page(page)
                     if page.url != before:
                         continue
                     if await vision_recover(page, profile, res.get("errors") or [],
                                             gemini_client, on_notify=on_notify):
                         continue
                     if on_stuck:
-                        ret = await _steer(page, "I'm stuck on this page — what should I do?",
-                                           user_id, profile, gemini_client,
-                                           on_stuck=on_stuck, on_notify=on_notify,
-                                           on_screenshot=on_screenshot, cast=cast)
-                        if ret == "cancel":
+                        ans = ((await on_stuck("I'm stuck on this page — what should I do?")) or "").strip()
+                        if ans.lower() in _CANCEL_WORDS:
                             result.status = "cancelled"
                             break
                         continue
@@ -640,14 +505,11 @@ async def run_application(
                         continue
                     stuck_pages += 1
                     if on_stuck:
-                        ret = await _steer(page, "I couldn't clear this page's errors. Any guidance?",
-                                           user_id, profile, gemini_client,
-                                           on_stuck=on_stuck, on_notify=on_notify,
-                                           on_screenshot=on_screenshot, cast=cast)
-                        if ret == "cancel":
+                        ans = ((await on_stuck("I couldn't clear this page's errors. Any guidance?")) or "").strip()
+                        if ans.lower() in _CANCEL_WORDS:
                             result.status = "cancelled"
                             break
-                        if ret:
+                        if ans:
                             continue
                     if stuck_pages >= 2:
                         result.status = "failed"

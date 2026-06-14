@@ -219,10 +219,8 @@ _COLLECT_JS = r"""
     } catch (e) {}
 
     // Viewport-relative coords so the red marks line up with the viewport screenshot.
-    const aid = (el.getAttribute('data-automation-id') || '').trim();
     const rec = { idx, tag, type: type || null, label,
                   box: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] };
-    if (aid) rec.aid = aid.slice(0, 80);
     if (section_label) { rec.section_label = section_label; rec.row_index = row_index; }
     if (section_word) { rec.section_word = section_word; }
     if (tag === 'input' || tag === 'textarea' || tag === 'select') {
@@ -395,8 +393,6 @@ def elements_to_text(elements: list, limit: int = 120) -> str:
         else:
             if e.get("label"):         parts.append(f'"{e["label"]}"')
             if e.get("section_label"): parts.append(f'({e["section_label"]})')
-            if e.get("name"):          parts.append(f'name={e["name"]}')
-            if e.get("aid"):           parts.append(f'aid={e["aid"]}')
             if e.get("widget"):        parts.append(f'<{e["widget"]}>')   # typeahead / select
             if e.get("value"):         parts.append(f'(current: {e["value"]})')
             if e.get("checked"):       parts.append("(checked)")
@@ -656,8 +652,7 @@ async def click_forward_button(page, on_notify=None) -> str:
 
 
 async def looks_like_auth(page) -> bool:
-    """True if the page is a login/sign-up wall (URL hint, visible password box,
-    or SSO chooser with social sign-in buttons)."""
+    """True if the page is a login/sign-up wall (URL hint or a visible password box)."""
     u = (page.url or "").lower()
     if any(h in u for h in AUTH_URL_HINTS):
         return True
@@ -667,18 +662,6 @@ async def looks_like_auth(page) -> bool:
                 return True
         except Exception:
             continue
-    # SSO chooser pages (Workday, Greenhouse) show social sign-in buttons
-    # but no password field — detect them by button text + page heading.
-    try:
-        body = ((await page.inner_text("body")) or "")[:3000].lower()
-        sso_signals = sum(1 for k in ("sign in with", "sign in using", "log in with",
-                                       "create account", "create an account",
-                                       "sign in with email", "don't have an account")
-                         if k in body)
-        if sso_signals >= 2:
-            return True
-    except Exception:
-        pass
     return False
 
 
@@ -714,27 +697,13 @@ async def try_auto_login(page, creds, on_notify=None) -> bool:
     em = frame.locator(email_sel).first if frame else None
     need_open = (frame is None) or (em is not None and await em.count() == 0)
     if need_open:
-        _SSO_SKIP = ("apple", "google", "linkedin", "facebook", "microsoft", "sso", "okta")
-        # "Sign in with email" first — on SSO chooser pages (Workday),
-        # substring-matching "Sign In" would hit "Sign in with Apple".
-        for txt in ("Sign in with email", "Sign in with Email",
-                    "Sign In", "Log In", "Member Login", "Login", "Sign in", "Log in"):
+        for txt in ("Sign In", "Log In", "Member Login", "Login", "Sign in", "Log in"):
             try:
-                locs = page.locator(
-                    f"a:has-text('{txt}'), button:has-text('{txt}'), [role=button]:has-text('{txt}')")
-                clicked_one = False
-                for li in range(min(await locs.count(), 6)):
-                    el = locs.nth(li)
-                    if not await el.is_visible():
-                        continue
-                    el_text = ((await el.inner_text()) or "").strip().lower()
-                    if any(s in el_text for s in _SSO_SKIP):
-                        continue
-                    await el.click(timeout=4000)
+                trig = page.locator(
+                    f"a:has-text('{txt}'), button:has-text('{txt}'), [role=button]:has-text('{txt}')").first
+                if await trig.count() > 0 and await trig.is_visible():
+                    await trig.click(timeout=4000)
                     await settle(page)
-                    clicked_one = True
-                    break
-                if clicked_one:
                     break
             except Exception:
                 continue
@@ -789,151 +758,6 @@ async def try_auto_login(page, creds, on_notify=None) -> bool:
         except Exception: pass
     if on_notify:
         await on_notify("🔑 Trying to log in with your saved credentials…")
-    return True
-
-
-async def try_create_account(page, creds, on_notify=None) -> bool:
-    """Create a new account with .env credentials on a Workday-style auth page.
-
-    Works from two entry points:
-      1. SSO chooser page — a "Create Account" link is visible (no prior error).
-      2. After a failed sign-in — error banner visible + "Create Account" link.
-
-    Flow: click Create Account link → fill email + password + verify-password →
-    tick consent checkboxes → submit. Returns True if the form was submitted
-    (caller checks looks_like_auth after settle). Returns False if no Create
-    Account link was found (→ caller falls back to sign-in or manual prompt)."""
-    if not (creds.get("email") and creds.get("password")):
-        return False
-
-    # If we're already on the registration form (≥2 visible password fields
-    # = password + verify), skip the navigation click.  Otherwise the
-    # locator matches the "Create Account" SUBMIT button (same text as the
-    # navigation link) and prematurely submits an empty form.
-    already_on_form = False
-    try:
-        already_on_form = await page.locator("input[type='password']:visible").count() >= 2
-    except Exception:
-        pass
-
-    if not already_on_form:
-        # Click the "Create Account" / "Don't have an account?" link.
-        # On the SSO chooser page this is visible directly; after a failed
-        # login it appears below the error banner.
-        found_link = False
-        for txt in ("Create Account", "Create account", "Register", "Sign Up",
-                    "Sign up", "Create an Account", "Create an account"):
-            try:
-                link = page.locator(
-                    f"a:has-text('{txt}'), button:has-text('{txt}'), "
-                    f"[role=button]:has-text('{txt}')").first
-                if await link.count() > 0 and await link.is_visible():
-                    await link.click(timeout=4000)
-                    found_link = True
-                    break
-            except Exception:
-                continue
-        if not found_link:
-            return False
-        await settle(page)
-        await page.wait_for_timeout(1000)
-
-    if on_notify:
-        await on_notify("📝 Creating a new account with your saved credentials…")
-
-    # Fill email — Workday uses createAccountEmail on the registration page
-    email_sel = ("input[data-automation-id='createAccountEmail'], "
-                 "input[data-automation-id='email'], input[data-automation-id='userName'], "
-                 "input[type='email'], input[name*='email' i], input[id*='email' i], "
-                 "input[autocomplete='username'], input[autocomplete='email']")
-    try:
-        em = page.locator(email_sel).first
-        if await em.count() > 0:
-            await em.scroll_into_view_if_needed()
-            await em.click()
-            await em.fill(creds["email"], timeout=4000)
-    except Exception:
-        return False
-
-    # Fill password fields (password + verify/confirm).
-    # Workday: createAccountPassword + verifyPassword automation-ids.
-    pw_sel = ("input[data-automation-id='createAccountPassword'], "
-              "input[data-automation-id='verifyPassword'], "
-              "input[type='password']:visible")
-    pw_fields = page.locator(pw_sel)
-    try:
-        count = await pw_fields.count()
-        for i in range(count):
-            await pw_fields.nth(i).fill(creds["password"], timeout=4000)
-    except Exception:
-        return False
-
-    # Tick any consent/terms checkbox
-    try:
-        checkboxes = page.locator(
-            "input[type='checkbox']:visible, [role='checkbox']:visible")
-        for i in range(await checkboxes.count()):
-            cb = checkboxes.nth(i)
-            checked = await cb.evaluate(
-                "e => e.checked === true || e.getAttribute('aria-checked') === 'true'")
-            if not checked:
-                try:
-                    await cb.click(timeout=2000)
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    # Submit: Workday's createAccountSubmitButton, then generic text match.
-    # Must scroll into view — Workday's create-account form is long and the
-    # button is below the fold.
-    submitted = False
-    try:
-        wd_btn = page.locator(
-            "[data-automation-id='createAccountSubmitButton']").first
-        if await wd_btn.count() > 0:
-            await wd_btn.scroll_into_view_if_needed(timeout=2000)
-            await wd_btn.click(timeout=4000)
-            submitted = True
-    except Exception:
-        pass
-    if not submitted:
-        for txt in ("Create Account", "Create account", "Register",
-                    "Sign Up", "Sign up", "Submit"):
-            try:
-                btn = page.locator(
-                    f"button:has-text('{txt}'), a:has-text('{txt}'), "
-                    f"input[type=submit][value*='{txt}' i], "
-                    f"[role=button]:has-text('{txt}')")
-                for bi in range(min(await btn.count(), 4)):
-                    el = btn.nth(bi)
-                    try:
-                        el_text = ((await el.inner_text()) or "").strip().lower()
-                    except Exception:
-                        continue
-                    # Skip navigation links like "Already have an account? Sign In"
-                    # — only click elements whose FULL text is the submit action.
-                    if len(el_text) > 30:
-                        continue
-                    try:
-                        await el.scroll_into_view_if_needed(timeout=2000)
-                        await el.click(timeout=4000)
-                        submitted = True
-                        break
-                    except Exception:
-                        continue
-                if submitted:
-                    break
-            except Exception:
-                continue
-    if not submitted:
-        try:
-            pw_fields = page.locator("input[type='password']:visible")
-            if await pw_fields.count() > 0:
-                await pw_fields.last.press("Enter")
-        except Exception:
-            pass
-
     return True
 
 
