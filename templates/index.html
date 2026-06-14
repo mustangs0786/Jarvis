@@ -1157,14 +1157,15 @@ function handleApplyEv(d,pl,res) {
   }
   if(d.step==='applied'){
     const ok=d.status==='success';
+    const alreadyApplied=d.status==='already_applied';
     finishApplyLog();
-    pushApplyLog(ok?`🎉 Application submitted via ${d.portal||'portal'}`:`Finished (${d.status||'incomplete'})`);
+    pushApplyLog(ok?`🎉 Application submitted via ${d.portal||'portal'}`:alreadyApplied?'✅ Already applied to this job':`Finished (${d.status||'incomplete'})`);
     finishApplyLog();
-    pl.innerHTML=`<div class="pi ${ok?'dk':'er'}"><div class="ico ${ok?'ck':'fl'}"></div><span>${ok?'Submitted!':'Incomplete'} via ${d.portal||'portal'}</span></div>`;
+    pl.innerHTML=`<div class="pi ${ok||alreadyApplied?'dk':'er'}"><div class="ico ${ok||alreadyApplied?'ck':'fl'}"></div><span>${ok?'Submitted!':alreadyApplied?'Already Applied':'Incomplete'} via ${d.portal||'portal'}</span></div>`;
     const filled=(d.fields_filled||[]).map(f=>`<span class="tag tg">${f}</span>`).join('');
     const banner=document.createElement('div');
-    banner.className=`nt ${ok?'ns':'nw'}`; banner.style.marginBottom='8px';
-    banner.innerHTML=`<strong>${ok?'🎉 Application Submitted!':'Done'}</strong>${d.company?' — '+d.company:''}${d.job_title?' · '+d.job_title:''}${filled?`<div class="mt2">${filled}</div>`:''}${d.error?`<div class="mt2 txs">${(d.error||'').slice(0,200)}</div>`:''}`;
+    banner.className=`nt ${ok||alreadyApplied?'ns':'nw'}`; banner.style.marginBottom='8px';
+    banner.innerHTML=`<strong>${ok?'🎉 Application Submitted!':alreadyApplied?'✅ Already Applied':'Done'}</strong>${d.company?' — '+d.company:''}${d.job_title?' · '+d.job_title:''}${alreadyApplied?'<div class="mt2 txs">You\'ve already applied to this job — LinkedIn removed the Apply button.</div>':''}${filled?`<div class="mt2">${filled}</div>`:''}${(!ok&&!alreadyApplied&&d.error)?`<div class="mt2 txs">${(d.error||'').slice(0,200)}</div>`:''}`;
     ensureApplyView(res);
     const logBox=document.getElementById('ap-log');
     if(logBox&&logBox.parentNode) logBox.parentNode.insertBefore(banner, logBox);

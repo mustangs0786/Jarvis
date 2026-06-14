@@ -1052,6 +1052,25 @@ async def run_easy_apply(
                     result.screenshot_path = ext_result.screenshot_path
                     return result
 
+                # Check if already applied — LinkedIn removes the Apply button in that case
+                page_text = (await page.content()).lower()
+                already_applied = any(p in page_text for p in [
+                    "you applied", "applied on", "application submitted",
+                    "your application was sent", "already applied",
+                ])
+                if not already_applied:
+                    try:
+                        already_applied = await page.locator(
+                            "text=Applied, text=You applied, [aria-label*='Applied']"
+                        ).count() > 0
+                    except Exception:
+                        pass
+                if already_applied:
+                    result.status = "already_applied"
+                    result.error  = "You have already applied to this job"
+                    await browser.close()
+                    return result
+
                 result.status = "failed"
                 result.error  = "Could not open Easy Apply modal"
                 ss = f"output/ea_{user_id}_no_modal.png"

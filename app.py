@@ -384,6 +384,7 @@ _DEMO_HTML = """<!doctype html>
   #shot{width:100%;display:block}
   #liveBadge{display:none;color:#2ecc71;font-weight:600;font-size:12px;margin-left:8px;animation:pulse 1.5s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @keyframes spin{to{transform:rotate(360deg)}}
   .empty{color:var(--mut);font-size:14px}
   #result{display:none;margin:16px 0 0;border-radius:14px;padding:16px 18px}
   #result.ok{background:#0f2a1f;border:1px solid #1f5a3a} #result.bad{background:#2a1014;border:1px solid #5a1f25}
@@ -440,11 +441,9 @@ _DEMO_HTML = """<!doctype html>
            onkeydown="if(event.key==='Enter')start()">
     <button id="go" onclick="start()">Apply →</button>
   </div>
-  <div class="chips">
-    <span class="chip" onclick="fill(this)" data-u="https://job-boards.greenhouse.io/rzr/jobs/4202830009"><b>Greenhouse</b> · sample</span>
-    <span class="chip" onclick="fill(this)" data-u="https://jobs.lever.co/lever"><b>Lever</b> · sample</span>
-    <span class="chip" onclick="fill(this)" data-u="https://expedia.wd108.myworkdayjobs.com/search"><b>Workday</b> · sample</span>
-    <span class="chip" onclick="fill(this)" data-u="https://www.linkedin.com/jobs/search/?f_LF=f_AL"><b>LinkedIn</b> · Easy Apply</span>
+  <div class="chips" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+    <span id="li-chips"><span style="display:inline-flex;align-items:center;gap:9px;font-size:15px;font-weight:600;color:#60a5fa;padding:6px 0"><span style="display:inline-block;width:16px;height:16px;border:2.5px solid #3b82f6;border-top-color:#93c5fd;border-radius:50%;animation:spin .8s linear infinite;flex:none"></span>Fetching live AI/ML jobs from LinkedIn… <span style="font-weight:400;font-size:13px;color:#9ca3af">(~30s)</span></span></span>
+    <button id="li-refresh" onclick="loadLiJobs()" title="Fetch fresh jobs" style="background:none;border:1px solid #374151;border-radius:8px;color:#9ca3af;font-size:12px;padding:4px 10px;cursor:pointer;display:none">↻ Refresh</button>
   </div>
 
   <div class="auto-row"><input type="checkbox" id="auto" checked>
@@ -617,6 +616,19 @@ _DEMO_HTML = """<!doctype html>
   }
   $('shot').onclick=function(){ this.classList.toggle('zoom'); };
   liStatus();
+  function loadLiJobs(){
+    var box=$('li-chips'), btn=$('li-refresh');
+    if(btn) btn.style.display='none';
+    box.innerHTML='<span style="display:inline-flex;align-items:center;gap:9px;font-size:15px;font-weight:600;color:#60a5fa;padding:6px 0"><span style="display:inline-block;width:16px;height:16px;border:2.5px solid #3b82f6;border-top-color:#93c5fd;border-radius:50%;animation:spin .8s linear infinite;flex:none"></span>Fetching live AI/ML jobs from LinkedIn… <span style="font-weight:400;font-size:13px;color:#9ca3af">(~30s)</span></span>';
+    fetch('/api/linkedin-jobs?n=3').then(function(r){return r.json()}).then(function(d){
+      if(!d.jobs||!d.jobs.length){ box.innerHTML='<span style="font-size:13px;color:#6b7280">No jobs found</span>'; }
+      else { box.innerHTML=d.jobs.map(function(j){
+        return '<span class="chip" onclick="fill(this)" data-u="'+esc(j.url)+'"><b>LinkedIn</b> · '+esc(j.title.length>35?j.title.slice(0,33)+'…':j.title)+(j.company?' <span style="opacity:.65;font-size:11px">@ '+esc(j.company)+'</span>':'')+'</span>';
+      }).join(''); }
+      if(btn) btn.style.display='';
+    }).catch(function(){ box.innerHTML=''; if(btn) btn.style.display=''; });
+  }
+  loadLiJobs();
 </script>
 </body></html>"""
 
@@ -1198,6 +1210,57 @@ async def linkedin_login_stream():
             yield {"data": json.dumps({"step": "error", "msg": str(e)[:200]})}
 
     return EventSourceResponse(generate())
+
+
+@app.get("/api/linkedin-jobs")
+async def linkedin_jobs_for_demo(n: int = 3):
+    """Fetch n recent LinkedIn Easy Apply jobs using saved cookies — for demo chips."""
+    async def _fetch():
+        from linkedin_url_extractor import load_cookies, HEADERS
+        from playwright.async_api import async_playwright
+        cookies = load_cookies()
+        if not cookies:
+            return []
+        jobs = []
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+            ctx = await browser.new_context(user_agent=HEADERS["User-Agent"])
+            await ctx.add_cookies(cookies)
+            page = await ctx.new_page()
+            try:
+                await page.goto(
+                    "https://www.linkedin.com/jobs/search/?f_LF=f_AL&keywords=%22data+scientist%22+OR+%22machine+learning+engineer%22+OR+%22AI+engineer%22&location=India&sortBy=DD",
+                    wait_until="domcontentloaded", timeout=20000,
+                )
+                await page.wait_for_timeout(5000)
+                cards = await page.locator("li[data-occludable-job-id]").all()
+                for card in cards[:max(n * 3, 12)]:
+                    if len(jobs) >= n:
+                        break
+                    try:
+                        link = card.locator("a.job-card-list__title--link")
+                        href = await link.get_attribute("href")
+                        title = (await link.inner_text()).strip().split("\n")[0].strip()
+                        company = ""
+                        try:
+                            company = (await card.locator(".job-card-container__primary-description, .artdeco-entity-lockup__subtitle").first.inner_text()).strip()
+                        except Exception:
+                            pass
+                        if href and title:
+                            clean = "https://www.linkedin.com" + href.split("?")[0]
+                            jobs.append({"url": clean, "title": title, "company": company})
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            await browser.close()
+        return jobs
+
+    try:
+        jobs = await asyncio.wait_for(_fetch(), timeout=30)
+        return {"jobs": jobs}
+    except Exception:
+        return {"jobs": []}
 
 
 # ── Jobs ──────────────────────────────────────────────────────────────────────
