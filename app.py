@@ -444,11 +444,12 @@ _DEMO_HTML = """<!doctype html>
     <span class="chip" onclick="fill(this)" data-u="https://job-boards.greenhouse.io/rzr/jobs/4202830009"><b>Greenhouse</b> · sample</span>
     <span class="chip" onclick="fill(this)" data-u="https://jobs.lever.co/lever"><b>Lever</b> · sample</span>
     <span class="chip" onclick="fill(this)" data-u="https://expedia.wd108.myworkdayjobs.com/search"><b>Workday</b> · sample</span>
+    <span class="chip" onclick="fill(this)" data-u="https://www.linkedin.com/jobs/search/?f_LF=f_AL"><b>LinkedIn</b> · Easy Apply</span>
   </div>
 
   <div class="auto-row"><input type="checkbox" id="auto" checked>
     <label for="auto">🤖 <b>Autopilot</b> — the agent only asks if it's stuck, and submits automatically</label></div>
-  <div class="auto-row"><input type="checkbox" id="tailorToggle">
+  <div class="auto-row"><input type="checkbox" id="tailorToggle" checked>
     <label for="tailorToggle">✍️ <b>Tailor résumé</b> — rewrite the résumé for this role first (off = apply directly with base résumé, faster)</label></div>
 
   <div class="li" id="li"><span class="lidot"></span><span id="liTxt">Checking LinkedIn…</span>
