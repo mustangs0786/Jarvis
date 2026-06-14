@@ -554,6 +554,13 @@
         <div id="ap6-profile" style="margin-bottom:14px"></div>
         <!-- action -->
         <div id="ap6-action">
+          <label style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg);border:1px solid var(--bd);border-radius:10px;margin-bottom:12px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="ap-tailor" checked style="width:16px;height:16px;cursor:pointer;accent-color:var(--bp,#6366f1)"/>
+            <span style="flex:1">
+              <span style="font-size:14px;font-weight:500">✍️ Tailor résumé</span>
+              <span class="tsm tf" style="display:block;margin-top:1px">rewrite the résumé for this role first (off = apply directly with base résumé, faster)</span>
+            </span>
+          </label>
           <button class="btn bp" style="width:100%;justify-content:center;padding:12px" onclick="triggerApply()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>
             Submit Application Now
@@ -1053,7 +1060,8 @@ function triggerApply() {
   window._applyLog=[];
   pl.style.display=''; res.classList.add('hidden'); res.innerHTML='';
   pl.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Launching browser agent...</span></div>`;
-  const sse=new EventSource(`/api/auto-apply?session_id=${SID}&job_url=${encodeURIComponent(optJobUrl)}`);
+  const doTailor=document.getElementById('ap-tailor')?.checked?1:0;
+  const sse=new EventSource(`/api/auto-apply?session_id=${SID}&job_url=${encodeURIComponent(optJobUrl)}&tailor=${doTailor}`);
   sse.onmessage=e=>{const d=JSON.parse(e.data);handleApplyEv(d,pl,res);if(['applied','error','apply_unavailable','no_profile'].includes(d.step))sse.close();};
   sse.onerror=()=>sse.close();
 }
