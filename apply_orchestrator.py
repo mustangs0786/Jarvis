@@ -126,6 +126,33 @@ def _save_learning(profile, user_id, url, instruction):
         pass
 
 
+async def _recover_or_ask(page, reason, *, user_id, profile, gemini_client,
+                          on_stuck, on_notify, on_screenshot, cast):
+    """Universal stuck ladder, used by EVERY stuck branch so none stops silently.
+
+    Order: (1) HTML+vision auto-recovery, then (2) human step-by-step guidance.
+    Returns:
+      'recovered' — vision fixed something → caller resets counters and retries
+      'continue'  — human gave guidance / said 'continue' → retry
+      'cancel'    — user cancelled the run
+      'give_up'   — nothing worked and no human is available → caller may stop
+    """
+    try:
+        if await vision_recover(page, profile, [], gemini_client, on_notify=on_notify):
+            return "recovered"
+    except Exception:
+        pass
+    if on_stuck:
+        ret = await _steer(page, reason, user_id, profile, gemini_client,
+                           on_stuck=on_stuck, on_notify=on_notify,
+                           on_screenshot=on_screenshot, cast=cast)
+        if ret == "cancel":
+            return "cancel"
+        if ret:
+            return "continue"
+    return "give_up"
+
+
 async def _click_submit(page) -> bool:
     """Click the FINAL submit button (auto-submit). Tries the explicit submit
     selectors first; deliberately does NOT touch 'Save and Continue'/'Next'
@@ -260,7 +287,16 @@ async def run_application(
         Path(PROFILE_DIR).mkdir(parents=True, exist_ok=True)
         ctx = await p.chromium.launch_persistent_context(
             str(PROFILE_DIR), headless=bool(int(os.getenv("APPLY_HEADLESS", "0"))),
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox",
+                  # Keep painting when the window is behind the dashboard. Chromium
+                  # stops rendering occluded/backgrounded windows, which made
+                  # page.screenshot() return a STALE frame — the live view only
+                  # updated when the user brought Chrome to the foreground. These
+                  # flags disable that throttling so the live stream stays fresh.
+                  "--disable-backgrounding-occluded-windows",
+                  "--disable-renderer-backgrounding",
+                  "--disable-background-timer-throttling",
+                  "--disable-features=CalculateNativeWinOcclusion"],
             viewport={"width": 1280, "height": 900},
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"))
@@ -329,7 +365,10 @@ async def run_application(
             last_url = ""
             no_progress = 0
             last_filled_sig = ()
-            visited_urls = {}   # url → iteration count, detects redirect loops
+            visited_urls = {}   # url → navigation count, detects redirect loops
+            last_canon = ""     # canon URL of the previous iteration
+            escalations = 0     # times we've run the stuck ladder (vision+human)
+            MAX_ESCALATIONS = 3
 
             from apply_engine import _site_domain
             app_dom = ""  # locked once we're past the gateway (it>2 or first converge)
@@ -358,20 +397,55 @@ async def run_application(
                     no_progress = 0
                 last_url = page.url
                 if no_progress >= 2:
+                    # Don't stop silently — run the universal stuck ladder:
+                    # HTML+vision auto-recovery, then human step-by-step guidance.
+                    if escalations < MAX_ESCALATIONS:
+                        escalations += 1
+                        outcome = await _recover_or_ask(
+                            page, "I can't make progress on this page — guide me step "
+                            "by step, or fix it in the browser and say 'continue'.",
+                            user_id=user_id, profile=profile, gemini_client=gemini_client,
+                            on_stuck=on_stuck, on_notify=on_notify,
+                            on_screenshot=on_screenshot, cast=cast)
+                        if outcome == "cancel":
+                            result.status = "cancelled"; break
+                        if outcome in ("recovered", "continue"):
+                            no_progress = 0; continue
                     if on_notify:
-                        await on_notify("⏹️ No progress after 2 full passes on this page — stopping.")
+                        await on_notify("⏹️ No progress after repeated attempts — stopping.")
                     if result.status == "pending":
                         result.status = "incomplete"
                     break
 
                 # Redirect-loop guard: site bounces between pages (e.g. job
-                # description → form → back to job description). URLs change each
-                # time so the no-progress guard above doesn't catch it.
+                # description → form → back to job description). A TRUE loop
+                # changes the URL and returns to a prior one, so we count a canon
+                # URL only when it CHANGES from the previous iteration. Without
+                # this, a single-URL SPA — Workday gives every step (My
+                # Information, My Experience, Application Questions…) the SAME
+                # /apply/applyManually URL — would be miscounted as a loop and
+                # killed after 3 normal steps. Genuine A→B→A→B bounces still trip
+                # because the URL changes on each hop.
                 _canon = page.url.split("?")[0].split("#")[0].rstrip("/")
-                visited_urls[_canon] = visited_urls.get(_canon, 0) + 1
+                if _canon != last_canon:
+                    visited_urls[_canon] = visited_urls.get(_canon, 0) + 1
+                last_canon = _canon
                 if visited_urls[_canon] >= 3:
+                    # Same universal ladder before giving up on a redirect loop.
+                    if escalations < MAX_ESCALATIONS:
+                        escalations += 1
+                        outcome = await _recover_or_ask(
+                            page, "This page keeps coming back and I can't get past it — "
+                            "guide me, or fix it in the browser and say 'continue'.",
+                            user_id=user_id, profile=profile, gemini_client=gemini_client,
+                            on_stuck=on_stuck, on_notify=on_notify,
+                            on_screenshot=on_screenshot, cast=cast)
+                        if outcome == "cancel":
+                            result.status = "cancelled"; break
+                        if outcome in ("recovered", "continue"):
+                            visited_urls[_canon] = 0; continue
                     if on_notify:
-                        await on_notify("⏹️ Redirect loop detected — this page keeps coming back.")
+                        await on_notify("⏹️ Redirect loop — stopping after repeated attempts.")
                     if result.status == "pending":
                         result.status = "incomplete"
                     break
@@ -575,7 +649,9 @@ async def run_application(
                 except Exception as ex:
                     logger.debug(f"vision audit skipped: {ex}")
 
-                await push_shot(page, user_id, it, on_screenshot, f"_p{it}")
+                # (No push_shot here — the continuous screencast already streams
+                # the live view; an extra per-iteration frame just adds queue
+                # churn and competes with the live stream.)
                 status = res.get("status")
 
                 if status == "advanced":

@@ -1129,7 +1129,10 @@ function handleApplyEv(d,pl,res) {
     ensureApplyView(res); pushApplyLog(d.msg); return;
   }
   if(d.step==='shot'){
-    if(d.url && !window._applyQuestionActive){ ensureApplyView(res); document.getElementById('ap-shot').src=d.url+'?t='+Date.now();
+    // ALWAYS show the latest live frame — never gate it behind a question.
+    // The live view must mirror the real browser at all times, even while the
+    // agent is asking for help, so the user sees exactly what's on screen.
+    if(d.url){ ensureApplyView(res); document.getElementById('ap-shot').src=d.url+'?t='+Date.now();
       const lv=document.getElementById('ap-live'); if(lv) lv.style.display='inline'; }
     return;
   }
@@ -1137,7 +1140,8 @@ function handleApplyEv(d,pl,res) {
     window._applyQuestionActive=true;
     pl.innerHTML=`<div class="pi ac"><div class="ico sp"><div class="spin"></div></div><span>Agent needs your input</span></div>`;
     ensureApplyView(res);
-    if(d.shot) document.getElementById('ap-shot').src=d.shot+'?t='+Date.now();
+    // Do NOT override the live image with a stale question-time shot — the
+    // continuous live stream keeps the image current on its own.
     document.getElementById('ap-qa').innerHTML=`<div class="nt nw"><strong>The agent needs your help:</strong>
       <div class="mt2" style="white-space:pre-wrap">${(d.msg||'').replace(/</g,'&lt;')}</div>
       <div class="mt2" style="display:flex;gap:8px">

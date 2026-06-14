@@ -982,7 +982,15 @@ async def run_easy_apply(
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=False,
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox",
+                  # Keep painting when the window is occluded/backgrounded — without
+                  # these, Chromium throttles rendering of the hidden window and
+                  # page.screenshot() returns a stale frame, so the live view only
+                  # refreshed when Chrome was brought to the foreground.
+                  "--disable-backgrounding-occluded-windows",
+                  "--disable-renderer-backgrounding",
+                  "--disable-background-timer-throttling",
+                  "--disable-features=CalculateNativeWinOcclusion"],
         )
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 900},

@@ -281,6 +281,16 @@ async def _form_dispatch(page, action: dict, resume_path: str) -> str:
                 return "skipped"
 
         elif act == "fill":
+            # Already-filled guard: the v2 pass re-emits every field each loop, so
+            # without this it keeps re-typing First/Last/Email that are already
+            # correct (the "why does it refill?" churn). Skip if the input already
+            # holds the target value.
+            try:
+                cur = (await el.input_value()) or ""
+                if cur.strip() and cur.strip().lower() == str(value).strip().lower():
+                    return "skipped"
+            except Exception:
+                pass
             await el.scroll_into_view_if_needed()
             await el.fill(str(value))
             print(f"    v2 filled: {label} = {str(value)[:40]}")
@@ -1339,6 +1349,25 @@ _GATEWAY_TEXTS = ["Apply Manually", "Apply manually", "Start Application",
                   "Start Your Application", "Apply Now", "Apply"]
 _GATEWAY_BAD = ("autofill", "linkedin", "last application", "resume")
 
+async def _step_sig(page):
+    """A signal that a multi-step form moved to a new step even when the URL does
+    NOT change (Workday is an SPA — every step shares the same /apply URL). Reads
+    the active progress-bar step, else the main page heading. Returns '' when not
+    determinable, so the caller cleanly falls back to URL-change detection only."""
+    try:
+        return ((await page.evaluate(
+            "() => {"
+            "  const a = document.querySelector("
+            "    \"[data-automation-id='progressBarActiveStep'],[aria-current='step'],[aria-current='page']\");"
+            "  if (a && a.innerText) return a.innerText.trim();"
+            "  const h = document.querySelector("
+            "    \"[data-automation-id='pageHeader'], h1, h2\");"
+            "  return h && h.innerText ? h.innerText.trim() : '';"
+            "}")) or "").strip()
+    except Exception:
+        return ""
+
+
 async def advance(page):
     """Forward-button ladder: auth -> NEXT -> submit-guard -> text fallback."""
     # Auth-step buttons first: on Workday's Create Account / Sign In page the
@@ -1533,16 +1562,64 @@ async def _open_and_click_option(page, idx, target):
         await page.wait_for_timeout(450)
     except Exception:
         return ""
+    clicked_opt = None
+    tfold = _deaccent(str(target))
     for osel in (".select__option", "[class*='select__option']",
-                 "[role='option']", "li[role='option']"):
+                 "[role='option']", "li[role='option']",
+                 # Phone-country widgets (intl-tel-input, react-international-phone)
+                 # render options as plain <li> with NO role=option and no 'option'
+                 # in the class — match their library markup, then any visible <li>
+                 # in a freshly-opened list as a catch-all (this is what was missing
+                 # for Greenhouse's phone country selector).
+                 "li.iti__country", ".iti__country-list li", ".country-list li",
+                 "[class*='country-selector'] li", "[class*='country'] li",
+                 "[class*='dropdown'] li", "[class*='menu'] li",
+                 "li[role='menuitem']", "li"):
         try:
-            opt = page.locator(osel).filter(has_text=str(target)).first
-            if await opt.count() and await opt.is_visible():
+            cand = page.locator(osel).filter(has_text=str(target))
+            cnt = await cand.count()
+            if cnt == 0:
+                continue
+            # EXACT match first: substring 'India' also matches 'British Indian
+            # Ocean Territory' (+246) — picking .first would select the wrong
+            # country. Scan candidates and prefer an exact (deaccented) text match;
+            # only fall back to the first substring hit if no exact match exists.
+            exact = None
+            first_visible = None
+            for i in range(min(cnt, 60)):
+                o = cand.nth(i)
+                try:
+                    if not await o.is_visible():
+                        continue
+                    txt = _deaccent((await o.inner_text()) or "")
+                except Exception:
+                    continue
+                if first_visible is None:
+                    first_visible = o
+                base = txt.split("+")[0].strip()   # drop trailing dial code
+                if txt == tfold or base == tfold or txt.startswith(tfold + " "):
+                    exact = o
+                    break
+            opt = exact or first_visible
+            if opt is not None:
+                await opt.scroll_into_view_if_needed(timeout=1500)
                 await opt.click(timeout=2000)
                 await page.wait_for_timeout(500)
+                clicked_opt = opt
                 break
         except Exception:
             continue
+
+    # Library-agnostic success signal: clicking an option closes the list, so if
+    # the option we clicked is gone, the selection committed. Covers widgets (the
+    # intl-tel-input phone country) whose selected value lives in a flag/title
+    # attribute that the react-select single-value check below cannot read.
+    if clicked_opt is not None:
+        try:
+            if not await clicked_opt.is_visible():
+                return str(target)
+        except Exception:
+            return str(target)
     # Verify via the control's single-value, scoped to THIS field's control.
     # (Must use .select__control / .select-shell — NOT a generic [class*=
     # container], which matches the narrow .select__input-container that does
@@ -1691,6 +1768,94 @@ async def _handle_select(page, e, val, idx_frame, elements, profile, user_id,
     committed = bool(chip) or await _field_shows_value(page, idx)
     return (("filled", f"[{idx}] {label}={(chip or target)[:30]} [{src}+exec]")
             if committed else ("fail", f"[{idx}] {label}={target!r} (did not commit)"))
+
+
+async def _fix_phone_country(page, profile, on_notify=None):
+    """Deterministically set the phone-country selector to the candidate's country.
+
+    Phone widgets (intl-tel-input, react-international-phone, react-select) default
+    to a wrong country (e.g. +246) which the generic LLM fill drives unreliably,
+    tripping "phone number is too long" validation. The fix for that error is the
+    COUNTRY code, not the number — so we find the country control, open it,
+    optionally search, click the matching country, and confirm the list closed.
+
+    Returns the country name on success, else ''. Fully defensive — never throws."""
+    country = str(profile.get("country") or "").strip() or "India"
+    cfold = country.casefold()
+    try:
+        # Open the flag/country button. Class differs across intl-tel-input
+        # versions: v18+ uses .iti__selected-country, older uses .iti__selected-flag.
+        opener = None
+        for s in (".iti__selected-country", ".iti__selected-flag",
+                  "[class*='country-selector'] button",     # react-international-phone
+                  "[aria-label='Select country']",
+                  "[aria-label*='phone country' i]",
+                  "[aria-label*='country code' i]"):
+            loc = page.locator(s).first
+            if await loc.count() > 0 and await loc.is_visible():
+                opener = loc
+                break
+        if opener is None:
+            return ""
+        await opener.scroll_into_view_if_needed(timeout=1500)
+        await opener.click(timeout=3000)
+        await page.wait_for_timeout(400)
+
+        # Type into the search box if present (filters the 240+ country list).
+        for ss in (".iti__search-input", "input[type='search']",
+                   "[class*='search'] input", "input[class*='search']"):
+            try:
+                si = page.locator(ss).first
+                if await si.count() > 0 and await si.is_visible():
+                    await si.fill(country, timeout=1500)
+                    await page.wait_for_timeout(400)
+                    break
+            except Exception:
+                continue
+
+        # CRITICAL: match the country name EXACTLY. Substring matching 'India'
+        # also hits 'British Indian Ocean Territory' (+246) — which sorts first,
+        # so a substring/.first pick selects the WRONG country. That is the +246
+        # bug. Iterate options and require an exact (case-insensitive) name match,
+        # reading the country-name span when present (intl-tel-input) else the
+        # element's own text.
+        for osel in ("li.iti__country", ".iti__country-list li",
+                     "[role='option']", ".country-list li",
+                     "[class*='country-selector'] li", "[class*='dropdown'] li", "li"):
+            try:
+                opts = page.locator(osel)
+                cnt = await opts.count()
+                if cnt == 0:
+                    continue
+                for i in range(min(cnt, 300)):
+                    o = opts.nth(i)
+                    try:
+                        if not await o.is_visible():
+                            continue
+                        name_loc = o.locator(".iti__country-name")
+                        if await name_loc.count() > 0:
+                            name = (await name_loc.first.inner_text() or "").strip()
+                        else:
+                            name = (await o.inner_text() or "").strip()
+                    except Exception:
+                        continue
+                    # Exact match (ignore a trailing dial code like 'India +91').
+                    nfold = name.casefold()
+                    if nfold == cfold or nfold.startswith(cfold + " ") or nfold.split("+")[0].strip() == cfold:
+                        await o.scroll_into_view_if_needed(timeout=1500)
+                        await o.click(timeout=2000)
+                        await page.wait_for_timeout(400)
+                        if on_notify:
+                            await on_notify(f"☎️ Phone country set to {country}")
+                        return country
+                # Found options for this selector but no exact match → stop here
+                # rather than letting a broader selector make a loose match.
+                return ""
+            except Exception:
+                continue
+        return ""
+    except Exception:
+        return ""
 
 
 async def _fill_one(page, e, idx_frame, elements, profile, user_id, creds,
@@ -2044,6 +2209,17 @@ def _site_domain(url: str) -> str:
         return ""
 
 
+def _label_of_note(note):
+    """Extract the field label from a fill-bucket note such as
+    '[13] Phone Country [native select failed]' or '[5] Email=foo' → 'Phone
+    Country' / 'Email'. Returns '' if not parseable. Used to target field-level
+    grounded repair at the fields that actually failed."""
+    s = re.sub(r"^\[\d+\]\s*", "", str(note or ""))   # drop leading [idx]
+    s = s.split("=")[0]                                  # drop '=value'
+    s = re.sub(r"\s*\[.*$", "", s)                       # drop trailing ' [note]'
+    return s.strip()
+
+
 async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=None,
                         max_attempts=6, creds=None, on_notify=None, on_screenshot=None):
     """Fill the current page and advance. Returns a result dict (incl. final `page`).
@@ -2084,6 +2260,7 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
 
     prev_sig = None
     grounded_tried = False   # on-demand HTML+vision repair: at most once per page
+    field_repairs = 0        # field-level HTML+vision repairs (the "retry 2x" budget)
     home_dom = _site_domain(page.url)
 
     for attempt in range(1, max_attempts + 1):
@@ -2151,8 +2328,30 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
                 except Exception: pass
         await _live(f"a{attempt}")
 
+        # Universal field-level recovery (LEAK #1 fix): any field the normal fill
+        # couldn't set gets the HTML+vision grounded repair AT THE POINT OF
+        # FAILURE — not only later on repeated validation errors, and targeting
+        # the ACTUAL failed field (not an error-text guess). This is the path that
+        # was missing for custom widgets like the phone-country dropdown. Bounded
+        # to a small "retry" budget per page.
+        if b["fail"] and field_repairs < 2:
+            fail_labels = [l for l in (_label_of_note(n) for n in b["fail"]) if l]
+            if fail_labels:
+                field_repairs += 1
+                if on_notify:
+                    await on_notify(f"🔎 Looking closer at: {', '.join(fail_labels[:3])}")
+                try:
+                    gfix = await _grounded_repair(
+                        page, profile, user_id, creds, gemini_client,
+                        [{"label": l} for l in fail_labels])
+                    if gfix:
+                        print(f"  -> field-level grounded repair fixed {gfix} field(s)")
+                except Exception as ex:
+                    print(f"  (field grounded repair skipped: {ex})")
+
         # 2) advance
         before = page.url
+        before_step = await _step_sig(page)   # multi-step SPA signal (Workday)
         ok, why = await advance(page)
         print(f"  advance: {'clicked' if ok else 'NOT clicked'} ({why})")
         await page.wait_for_timeout(2500)
@@ -2162,8 +2361,13 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
             page = np
         await settle(page)
 
-        if page.url != before:
-            print(f"\n[OK] PAGE CLEARED — advanced to:\n     {page.url}")
+        # Advanced if the URL changed OR — for single-URL SPAs like Workday, where
+        # every step shares /apply/applyManually — the form's active step/heading
+        # changed. Without the step check, a normal Save-and-Continue on Workday
+        # looks like "didn't advance" and the page limps forward via fallbacks.
+        after_step = await _step_sig(page)
+        if page.url != before or (before_step and after_step and after_step != before_step):
+            print(f"\n[OK] PAGE CLEARED — advanced to:\n     {page.url}  step={after_step[:40]!r}")
             return {"status": "advanced", "page": page, "url": page.url, "held": held_list, "filled": filled_all}
 
         # 3) blocked -> the page errors are the to-do list
@@ -2178,6 +2382,17 @@ async def converge_page(page, ctx, profile=None, user_id=1, *, gemini_client=Non
         for e in errors[:12]:
             mk = f"[{e['idx']:>3}] " if e.get("idx") is not None else "      "
             print(f"    {mk}{e.get('label','')!r:<38} {e.get('error','')}")
+
+        # Phone-country first: "phone number is too long / invalid" is almost
+        # always a WRONG country code (e.g. +246 instead of +91), and the fix is
+        # the COUNTRY selector, not the number — which generic field correction
+        # would never touch. Handle it deterministically before anything else.
+        if any("phone" in (str(e.get("error", "")) + " " + str(e.get("label", ""))).lower()
+               for e in errors):
+            if await _fix_phone_country(page, profile, on_notify=on_notify):
+                print("  -> fixed phone country deterministically")
+                prev_sig = None
+                continue
 
         print("\n  correcting errored fields:")
         n_fixed = await _correct_errored_fields(page, profile, user_id, creds,
@@ -2399,8 +2614,19 @@ async def _click_option_by_text(page, want):
     want_l = _deaccent(want)
     sels = ["[role='option']", "[data-automation-id='promptOption']",
             "[data-automation-id='promptLeafNode']", ".select__option",
-            "[id*='-option-']", "li[role='option']", "[class*='option']:not(button)"]
+            "[id*='-option-']", "li[role='option']", "[class*='option']:not(button)",
+            # Phone-country widgets render options as plain <li> (no role=option,
+            # no 'option' class) — include their library markup + a generic <li>
+            # catch-all so the HTML-grounded fallback can drive them.
+            "li.iti__country", ".iti__country-list li", ".country-list li",
+            "[class*='country-selector'] li", "[class*='country'] li",
+            "[class*='dropdown'] li", "[class*='menu'] li", "li"]
     for _ in range(12):
+        # Two-pass per scroll position: take an EXACT (deaccented) text match if one
+        # exists before settling for a substring hit. 'India' is a substring of
+        # 'British Indian Ocean Territory' (+246) — substring-first picks the wrong
+        # country; exact-first fixes it.
+        substr_fallback = None
         for s in sels:
             try:
                 loc = page.locator(s)
@@ -2412,7 +2638,10 @@ async def _click_option_by_text(page, want):
                         t = _deaccent((await o.inner_text()) or "")
                     except Exception:
                         continue
-                    if t and (t == want_l or want_l in t or t in want_l):
+                    if not t:
+                        continue
+                    base = t.split("+")[0].strip()   # drop a trailing dial code
+                    if t == want_l or base == want_l or t.startswith(want_l + " "):
                         try:
                             await o.scroll_into_view_if_needed(timeout=1200)
                             await o.click(timeout=3000)
@@ -2420,8 +2649,18 @@ async def _click_option_by_text(page, want):
                             return True
                         except Exception:
                             continue
+                    if substr_fallback is None and (want_l in t or t in want_l):
+                        substr_fallback = o
             except Exception:
                 continue
+        if substr_fallback is not None:
+            try:
+                await substr_fallback.scroll_into_view_if_needed(timeout=1200)
+                await substr_fallback.click(timeout=3000)
+                await page.wait_for_timeout(400)
+                return True
+            except Exception:
+                pass
         try:
             await page.locator("[role='listbox']").last.evaluate(
                 "el => el.scrollBy(0, Math.max(el.clientHeight*0.8, 240))")

@@ -39,10 +39,13 @@ class Screencast:
     """Streams the FRONTMOST tab of a browser context. The orchestrator no longer
     needs to tell it which page is active — it figures that out each tick."""
 
-    def __init__(self, ctx, on_screenshot, user_id, interval: float = 0.5):
+    def __init__(self, ctx, on_screenshot, user_id, interval: float = 0.3):
         self._ctx = ctx
         self._on_screenshot = on_screenshot
-        self._path = f"output/live_{user_id}.png"
+        # JPEG, not PNG: ~5-8x smaller and far faster to encode → much less
+        # capture + transfer latency per frame. .jpg extension so StaticFiles
+        # serves the correct image/jpeg content-type.
+        self._path = f"output/live_{user_id}.jpg"
         self._tmp = self._path + ".tmp"
         self._interval = interval
         self._task = asyncio.create_task(self._loop())
@@ -76,7 +79,8 @@ class Screencast:
             try:
                 pg = await self._active_page()
                 if pg is not None:
-                    data = await pg.screenshot(full_page=False, timeout=3000, type="png")
+                    data = await pg.screenshot(full_page=False, timeout=3000,
+                                               type="jpeg", quality=55)
                     with open(self._tmp, "wb") as f:
                         f.write(data)
                     os.replace(self._tmp, self._path)
@@ -102,7 +106,7 @@ class Screencast:
         return self._task
 
 
-def start_screencast(ctx, on_screenshot, user_id, interval: float = 0.5) -> "Screencast":
+def start_screencast(ctx, on_screenshot, user_id, interval: float = 0.3) -> "Screencast":
     """Start a background screencast that auto-follows the frontmost tab of `ctx`."""
     return Screencast(ctx, on_screenshot, user_id, interval)
 

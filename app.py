@@ -1050,6 +1050,7 @@ async def auto_apply_stream(job_url: str, session_id: str = "", autopilot: int =
         APPLY_ANSWERS[session_id] = answer_q
 
         latest_shot = {"url": ""}  # most recent screenshot, shown with questions
+        shot_pending = {"v": False}  # coalesce: at most ONE shot event in flight
 
         async def on_notify(msg):
             event_q.put({"type": "notify", "msg": msg})
@@ -1058,7 +1059,14 @@ async def auto_apply_stream(job_url: str, session_id: str = "", autopilot: int =
             # Screenshots are written under output/ which is mounted at /output.
             name = str(path).replace("\\", "/").split("/")[-1]
             latest_shot["url"] = f"/output/{name}"
-            event_q.put({"type": "shot", "url": latest_shot["url"]})
+            # Coalesce frames: every shot points at the SAME live file (the client
+            # cache-busts with ?t=), so one pending "refresh" event is all the UI
+            # needs. Without this the unbounded queue backs up with stale shots and
+            # the live view falls further behind the real browser the longer it
+            # runs — the lag the user was seeing.
+            if not shot_pending["v"]:
+                shot_pending["v"] = True
+                event_q.put({"type": "shot", "url": latest_shot["url"]})
 
         async def on_stuck(question):
             # Surface the question + current screenshot, then block until answered.
@@ -1109,7 +1117,11 @@ async def auto_apply_stream(job_url: str, session_id: str = "", autopilot: int =
                     yield {"data": json.dumps({"step": "applying", "msg": item["msg"]})}
 
                 elif kind == "shot":
-                    yield {"data": json.dumps({"step": "shot", "url": item["url"]})}
+                    # Clear the gate FIRST so the next frame can enqueue, and send
+                    # the freshest URL (the file may have been overwritten since
+                    # this event was queued).
+                    shot_pending["v"] = False
+                    yield {"data": json.dumps({"step": "shot", "url": latest_shot["url"]})}
 
                 elif kind == "question":
                     yield {"data": json.dumps({"step": "question", "msg": item["msg"], "shot": item.get("shot", "")})}
